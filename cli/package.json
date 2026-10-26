@@ -1,6 +1,6 @@
 {
   "name": "regent",
-  "version": "102.2.0",
+  "version": "102.2.1",
   "description": "Elizabeth's Proxy CLI - start and manage the Elizabeth's Proxy server",
   "bin": {
     "regent": "./cli.js"

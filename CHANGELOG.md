@@ -1,4 +1,9 @@
 
+# v102.2.1 (2026-10-26)
+
+## Fixes
+- **translator**: Correct mislabeled image mime from magic bytes (#155)
+
 # v102.2.0 (2026-10-24)
 
 ## Upgrade notes
