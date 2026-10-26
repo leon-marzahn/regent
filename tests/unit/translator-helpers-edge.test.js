@@ -47,4 +47,11 @@ describe("parseDataUri / encodeDataUri (docs 11 §4)", () => {
     const uri = encodeDataUri("image/webp", "ZZZ");
     expect(parseDataUri(uri)).toEqual({ mimeType: "image/webp", base64: "ZZZ" });
   });
+
+  it("corrects a mislabeled image mime from magic bytes (Tavo sends webp as jpeg)", () => {
+    const webp = Buffer.from("RIFF\0\0\0\0WEBPVP8 ").toString("base64");
+    expect(parseDataUri(`data:image/jpeg;base64,${webp}`)?.mimeType).toBe("image/webp");
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString("base64");
+    expect(parseDataUri(`data:image/png;base64,${jpeg}`)?.mimeType).toBe("image/jpeg");
+  });
 });
