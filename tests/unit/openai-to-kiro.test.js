@@ -71,7 +71,7 @@ describe("openaiToKiroRequest", () => {
             role: "user",
             content: [
               { type: "text", text: "Compare these images" },
-              { type: "image_url", image_url: { url: `data:image/jpeg;base64,${fakeBase64}` } },
+              { type: "image_url", image_url: { url: `data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ==` } },
               { type: "image_url", image_url: { url: `data:image/png;base64,${fakeBase64}` } }
             ]
           }

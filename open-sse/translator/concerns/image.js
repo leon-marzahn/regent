@@ -5,11 +5,19 @@ export function encodeDataUri(mimeType, base64) {
 
 // Parse a base64 data URI → { mimeType, base64 }, or null if not a data URI.
 // [\s\S] tolerates newlines inside the base64 payload.
+// Image mimes are corrected from the magic bytes: clients (e.g. Tavo) label WebP
+// as image/jpeg, and Bedrock-backed upstreams reject the mismatch with a 400.
 const DATA_URI_RE = /^data:([^;]+);base64,([\s\S]+)$/;
 export function parseDataUri(url) {
   if (typeof url !== "string") return null;
   const m = url.match(DATA_URI_RE);
-  return m ? { mimeType: m[1], base64: m[2] } : null;
+  if (!m) return null;
+  let mimeType = m[1];
+  if (mimeType.startsWith("image/")) {
+    const head = Buffer.from(m[2].slice(0, 32).replace(/\s/g, ""), "base64");
+    mimeType = detectImageMime(head) || mimeType;
+  }
+  return { mimeType, base64: m[2] };
 }
 
 import { lookup } from "node:dns/promises";
