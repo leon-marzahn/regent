@@ -29,6 +29,9 @@ jobs:
     name: Browser smoke
     runs-on: ubuntu-latest
     timeout-minutes: 12
+    # Chromium and its system libraries are preinstalled in the image, so no
+    # per-run apt-get. Keep the tag in step with the pinned playwright-core.
+    container: mcr.microsoft.com/playwright:v1.63.0-noble
     steps:
       - uses: actions/checkout@v5
         with:
@@ -47,26 +50,9 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
-      # Keyed on the pinned playwright-core version (same Chromium revision).
-      - name: Cache Playwright Chromium
-        id: pw-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-
-      - name: Install Chromium
-        if: steps.pw-cache.outputs.cache-hit != 'true'
-        run: bunx playwright@1.63.0 install --with-deps chromium
-
-      - name: Install Chromium system deps
-        if: steps.pw-cache.outputs.cache-hit == 'true'
-        run: bunx playwright@1.63.0 install-deps chromium
-
       # Webpack's persistent cache for the smoke's `next build` (.next-smoke, several
       # hundred MB). Every run restores the newest one; only master saves, and only
-      # when the sources changed, so PRs don't fill the 10 GB Actions cache and
-      # evict Playwright's.
+      # when the sources changed, so PRs don't fill the 10 GB Actions cache.
       - name: Restore Next build cache
         uses: actions/cache/restore@v4
         with:
