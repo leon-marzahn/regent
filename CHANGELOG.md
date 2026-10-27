@@ -1,4 +1,9 @@
 
+# v102.2.2 (2026-10-27)
+
+## Fixes
+- **translator**: Inline text file attachments for kiro and claude targets (#158)
+
 # v102.2.1 (2026-10-26)
 
 ## Fixes
