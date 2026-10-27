@@ -19,6 +19,7 @@ import {
   usesKiroNativeGptEffort
 } from "../../config/kiroConstants.js";
 import { parseDataUri } from "../concerns/image.js";
+import { fileTextPart } from "../concerns/file.js";
 import { DEFAULT_IMAGE_MIME } from "../schema/index.js";
 import { ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
 import {
@@ -134,6 +135,9 @@ function convertMessages(messages, model) {
               const format = mediaType.split("/")[1] || mediaType;
               pendingImages.push({ format, source: { bytes: c.source.data } });
             }
+          } else if (c.type === OPENAI_BLOCK.FILE) {
+            const text = fileTextPart(c);
+            if (text) textParts.push(text);
           }
         }
         content = textParts.join("\n");
