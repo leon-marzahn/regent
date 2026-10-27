@@ -4,6 +4,7 @@ import { CLAUDE_SYSTEM_PROMPT } from "../../config/appConstants.js";
 import { adjustMaxTokens } from "../formats/maxTokens.js";
 import { safeParseJSON } from "../concerns/json.js";
 import { parseDataUri } from "../concerns/image.js";
+import { fileTextPart } from "../concerns/file.js";
 import { extractTextContent } from "../formats/gemini.js";
 import { ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
 import { getCapabilitiesForModel } from "../../providers/capabilities.js";
@@ -240,7 +241,8 @@ function getContentBlocksFromMessage(msg, toolNameMap = new Map()) {
         } else if (part.type === OPENAI_BLOCK.IMAGE && part.source) {
           blocks.push({ type: CLAUDE_BLOCK.IMAGE, source: part.source });
         } else if (part.type === OPENAI_BLOCK.FILE && part.file) {
-          // OpenAI file block -> Claude document (PDF only; Claude rejects other mimes).
+          // OpenAI file block -> Claude document (PDF only; Claude rejects other
+          // mimes), text files inlined as a text block.
           const fileData = part.file.file_data;
           const parsed = parseDataUri(fileData);
           if (parsed && parsed.mimeType === "application/pdf") {
@@ -248,6 +250,9 @@ function getContentBlocksFromMessage(msg, toolNameMap = new Map()) {
               type: CLAUDE_BLOCK.DOCUMENT,
               source: { type: "base64", media_type: parsed.mimeType, data: parsed.base64 }
             });
+          } else {
+            const text = fileTextPart(part);
+            if (text) blocks.push({ type: CLAUDE_BLOCK.TEXT, text });
           }
         }
       }
