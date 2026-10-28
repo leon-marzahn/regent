@@ -27,6 +27,7 @@ import BulkImportCodexModal from "./BulkImportCodexModal";
 import BulkImportGrokCliModal from "./BulkImportGrokCliModal";
 import CustomConfigCard from "./CustomConfigCard";
 import AutoPingScheduleModal from "./AutoPingScheduleModal";
+import { MinimaxLeaseButton, MCODE_LEASE_PROVIDERS } from "./MinimaxLeaseButton";
 import { getScheduleSlotLabels } from "@/shared/services/quotaPingSchedule";
 
 const ONE_BY_ONE_DELAY_MS = 1000;
@@ -1614,6 +1615,9 @@ export default function ProviderManager({ providerId, embedded = false, liveVers
           <div className="mt-3 flex flex-wrap gap-2">
               {providerId === "iflow" && !isCompatible && (
                 <UiButton icon="cookie" onClick={() => setShowIFlowCookieModal(true)} title="Add connection using browser cookie">Cookie</UiButton>
+              )}
+              {MCODE_LEASE_PROVIDERS.has(providerId) && !isCompatible && (
+                <MinimaxLeaseButton providerId={providerId} onConnected={fetchConnections} />
               )}
               {providerId === "codex" && (
                 <UiButton icon="playlist_add" onClick={() => setShowBulkImportCodex(true)} title={translate("Bulk import codex accounts from JSON")}>{translate("Bulk Add")}</UiButton>

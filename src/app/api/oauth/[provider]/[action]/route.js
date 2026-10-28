@@ -8,6 +8,10 @@ import {
   pollForToken
 } from "@/lib/oauth/providers";
 import { createProviderConnection } from "@/models";
+import { getProviderConnections } from "@/lib/localDb";
+import { requestLease, requestStatus, resolveMcodeDataDir, AuthLeaseError } from "open-sse/services/minimaxCodeLease.js";
+import { isLocalRequest } from "@/dashboardGuard";
+import { hasValidCliToken } from "@/lib/auth/cliToken";
 import { readDesktopPassToken } from "open-sse/shared/mimoAccount.js";
 import {
   startCodexProxy,
@@ -81,6 +85,27 @@ async function completeXaiManualCode(code, state) {
     stopXaiProxy();
     throw err;
   }
+}
+
+const MCODE_LEASE_PROVIDERS = new Set(["minimax-code", "minimax-code-global"]);
+
+// MiniMax Code desktop lease actions reach a broker socket in this host's home dir.
+// dashboardGuard already makes /api/oauth/<minimax-code*>/lease* local-only and
+// always protected; repeat the local check here so a path spelling the guard's
+// prefix match misses (e.g. percent-encoded) can't skip it.
+async function leaseGate(request, provider, action) {
+  if (!MCODE_LEASE_PROVIDERS.has(provider)) {
+    return NextResponse.json({ error: `${action} only supported for minimax-code/minimax-code-global` }, { status: 400 });
+  }
+  if (!isLocalRequest(request) && !(await hasValidCliToken(request))) {
+    return NextResponse.json({ error: "Local only: CLI token required" }, { status: 403 });
+  }
+  return null;
+}
+
+// Our own AuthLeaseError messages carry no paths or secrets; anything else is generic.
+function leaseErrorMessage(error) {
+  return error instanceof AuthLeaseError ? error.message : "Desktop authentication request failed.";
 }
 
 /**
@@ -285,6 +310,20 @@ export async function GET(request, { params }) {
       });
     }
 
+    if (action === "lease-status") {
+      // MiniMax Code desktop broker probe: is the desktop app installed,
+      // running and signed in on this machine? Read-only — leases nothing.
+      const denied = await leaseGate(request, provider, action);
+      if (denied) return denied;
+      try {
+        const status = await requestStatus(resolveMcodeDataDir());
+        return NextResponse.json({ found: true, ...status });
+      } catch (error) {
+        const code = error instanceof AuthLeaseError ? error.code : "INTERNAL_ERROR";
+        return NextResponse.json({ found: false, error: code, message: leaseErrorMessage(error) });
+      }
+    }
+
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   } catch (error) {
     console.log("OAuth GET error:", error);
@@ -302,6 +341,41 @@ export async function POST(request, { params }) {
       body = await request.json();
     } catch {
       return NextResponse.json({ error: "Invalid or empty request body" }, { status: 400 });
+    }
+
+    if (action === "lease-connect") {
+      // MiniMax Code: create a connection that borrows the desktop app's
+      // sign-in over the local auth-lease pipe (authType "mcode-lease"). The
+      // router stores no tokens for it — the desktop broker owns refresh.
+      // The data dir is server config (env or ~/.minimax), never taken from the
+      // body: a caller-chosen path would aim the client at any local socket.
+      const denied = await leaseGate(request, provider, action);
+      if (denied) return denied;
+      try {
+        // Validate availability up front so the user gets the broker's exact
+        // failure reason instead of a dead connection. The leased token is
+        // discarded here; requests borrow their own from the lease cache.
+        await requestLease(resolveMcodeDataDir());
+      } catch (error) {
+        const code = error instanceof AuthLeaseError ? error.code : "INTERNAL_ERROR";
+        return NextResponse.json({ error: leaseErrorMessage(error), code }, { status: 409 });
+      }
+
+      // Idempotent: one lease connection per provider (one desktop install per host).
+      const existing = (await getProviderConnections({ provider }))
+        .find((c) => c.authType === "mcode-lease");
+      if (existing) {
+        return NextResponse.json({ success: true, connection: { id: existing.id, provider: existing.provider }, reused: true });
+      }
+
+      // No token fields: the desktop broker owns the credentials.
+      const connection = await createProviderConnection({
+        provider,
+        authType: "mcode-lease",
+        name: provider === "minimax-code-global" ? "MiniMax Desktop (Lease, Global)" : "MiniMax Desktop (Lease)",
+        testStatus: "active",
+      });
+      return NextResponse.json({ success: true, connection: { id: connection.id, provider: connection.provider } });
     }
 
     if (action === "register-session") {
