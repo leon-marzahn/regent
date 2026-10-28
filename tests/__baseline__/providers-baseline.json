@@ -226,8 +226,11 @@
     "format": "commandcode",
     "forceStream": true,
     "headers": {
-      "x-command-code-version": "0.25.7",
-      "x-cli-environment": "cli"
+      "User-Agent": "cli",
+      "x-command-code-version": "1.88.0",
+      "x-cli-environment": "production",
+      "x-cli-surface": "cli",
+      "x-taste-learning": "false"
     }
   },
   "cursor": {
@@ -1260,6 +1263,11 @@
   "volink": {
     "baseUrl": "https://api.volink.org/v1/chat/completions",
     "validateUrl": "https://api.volink.org/v1/models",
+    "format": "openai"
+  },
+  "runcrate": {
+    "baseUrl": "https://api.runcrate.ai/v1/chat/completions",
+    "validateUrl": "https://www.runcrate.ai/api/v1/billing/balance",
     "format": "openai"
   }
 }

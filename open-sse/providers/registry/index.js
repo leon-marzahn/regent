@@ -140,6 +140,8 @@ import p136 from "./bedrock.js";
 import p137 from "./bedrock-xai.js";
 import p138 from "./nous.js";
 import p139 from "./volink.js";
+import p152 from "./runcrate.js";
+import p153 from "./nace.js";
 export default [
   p0,
   p1,
@@ -280,4 +282,6 @@ export default [
   p137,
   p138,
   p139,
+  p152,
+  p153,
 ];

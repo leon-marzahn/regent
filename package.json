@@ -4,8 +4,8 @@
   "packageManager": "bun@1.3.14",
   "forkedFrom": {
     "repo": "decolua/9router",
-    "version": "0.5.109",
-    "commit": "f39d8f07"
+    "version": "0.5.112",
+    "commit": "1fe586bb"
   },
   "private": true,
   "description": "9Router web dashboard",
