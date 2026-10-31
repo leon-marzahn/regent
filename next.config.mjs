@@ -26,15 +26,20 @@ const nextConfig = {
   // ~/.aws/config and the SSO token cache from disk at runtime and resolves its credential
   // plugins by dynamic require, neither of which survives bundling.
   // wreq-js loads a per-platform native .node binding by require at runtime; bundling breaks that lookup.
-  serverExternalPackages: ["better-sqlite3", "sql.js", "node:sqlite", "bun:sqlite", "open", "@aws-sdk/credential-providers", "wreq-js"],
+  // undici must stay external too: webpack's vendored copy drops the per-request
+  // `dispatcher` connect options (ecdhCurve) — the built server then RSTs on
+  // DPI-shaped networks while the dev server (real undici) passes.
+  serverExternalPackages: ["better-sqlite3", "sql.js", "node:sqlite", "bun:sqlite", "open", "@aws-sdk/credential-providers", "wreq-js", "undici"],
   turbopack: {
     root: tracingRoot
   },
   outputFileTracingRoot: tracingRoot,
   // tlsImpersonation.js imports wreq-js with a bundler-ignored specifier (so a missing optional
   // package can't break the build), which also hides it from file tracing: ship it explicitly.
+  // undici is external (above) and only reached by dynamic import("undici"), which the trace
+  // doesn't follow either, so force-ship the real package as well.
   outputFileTracingIncludes: {
-    "/**": ["./node_modules/wreq-js/**/*", "./node_modules/@wreq-js/**/*"]
+    "/**": ["./node_modules/wreq-js/**/*", "./node_modules/@wreq-js/**/*", "./node_modules/undici/**/*"]
   },
   images: {
     unoptimized: true

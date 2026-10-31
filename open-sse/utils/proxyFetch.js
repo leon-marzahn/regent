@@ -4,8 +4,17 @@ import { maskString } from "./maskSecrets.cjs";
 import { wreqFetch } from "./tlsImpersonation.js";
 import { getScopedProxyOptions, PROXY_UNAVAILABLE } from "./proxyScope.js";
 
-const originalFetch = globalThis.fetch;
 const proxyDispatchers = new Map();
+
+// Always fetch through the package's own undici instance: undici 8 rejects
+// dispatchers created by a different undici copy (UND_ERR_INVALID_ARG on the
+// bundled-in-Node global fetch), so originalFetch/globalThis.fetch is not an
+// option once we build our own Agents.
+let undiciFetch = null;
+async function rawFetch(url, options) {
+  undiciFetch ??= (await import("undici")).fetch;
+  return undiciFetch(url, options);
+}
 
 // ─── TLS fingerprinting via got-scraping (browser-like JA3) ───────────────
 // Disabled: not in use. Kept commented for future re-enable.
@@ -229,12 +238,19 @@ function resolveConnectionProxyUrl(targetUrl, proxyOptions) {
   return normalizeProxyUrl(proxyUrlRaw);
 }
 
+// ISP DPI (VN → api.anthropic.com) RSTs Node's default TLS ClientHello curve
+// list; a single curve rewrites the fingerprint enough to pass. Empirically:
+// default agent = ECONNRESET 100%, X25519 = through 100%.
+// REGENT_TLS_ECDH_CURVE overrides it (the upstream NINEROUTER_TLS_ECDH_CURVE is still read).
+const TLS_ECDH_CURVE = process.env.REGENT_TLS_ECDH_CURVE || process.env.NINEROUTER_TLS_ECDH_CURVE || "X25519";
+
 /**
- * Create proxy dispatcher lazily (undici-compatible)
+ * Create proxy dispatcher lazily (undici-compatible).
+ * Always returns a dispatcher — the direct path needs the custom Agent too,
+ * otherwise the default global agent's ClientHello gets RST-ed by DPI.
  */
 async function getDispatcher(proxyUrl, insecure = false) {
   const normalized = normalizeProxyUrl(proxyUrl);
-  if (!normalized && !insecure) return null;
 
   const key = `${normalized || "direct"}::${insecure ? "insecure" : "secure"}`;
   if (!proxyDispatchers.has(key)) {
@@ -243,10 +259,18 @@ async function getDispatcher(proxyUrl, insecure = false) {
       proxyDispatchers.delete(proxyDispatchers.keys().next().value);
     }
     const { Agent, ProxyAgent } = await import("undici");
-    const connect = insecure ? { rejectUnauthorized: false } : undefined;
+    // autoSelectFamilyAttemptTimeout = happy eyeballs (RFC 8305): race both
+    // address families, fall over in 250ms — replaces the old global
+    // ipv4first flag, which fixed one broken-family network by breaking the
+    // other (see claude-code#20240 vs our VN case: IPv4 path RST-ed).
+    // requestTls must stay TLS-options-only (undici 8 rejects connect-level
+    // options there with UND_ERR_INVALID_ARG).
+    const eyeballs = { autoSelectFamily: true, autoSelectFamilyAttemptTimeout: 250 };
+    const tlsOpts = { ecdhCurve: TLS_ECDH_CURVE, ...(insecure ? { rejectUnauthorized: false } : {}) };
+    const connect = { ...eyeballs, ...tlsOpts };
     const dispatcher = normalized
-      ? new ProxyAgent({ uri: normalized, ...(insecure ? { requestTls: connect } : {}) })
-      : new Agent({ connect });
+      ? new ProxyAgent({ uri: normalized, connect: eyeballs, requestTls: tlsOpts })
+      : new Agent({ connect, keepAliveTimeout: 4000 });
     proxyDispatchers.set(key, dispatcher);
   }
 
@@ -262,8 +286,8 @@ async function fetchWithTlsFallback(url, options, proxyUrl, impersonation = null
     // Protocol adapters may need Node's HTTP/1 transport on the direct path.
     // Keep proxy/no-proxy resolution and strict-proxy enforcement here.
     if (!proxyUrl && options.directFetch) return await options.directFetch(url, options);
-    const dispatcher = proxyUrl ? await getDispatcher(proxyUrl) : undefined;
-    return await originalFetch(url, dispatcher ? { ...options, dispatcher } : options);
+    const dispatcher = await getDispatcher(proxyUrl);
+    return await rawFetch(url, { ...options, dispatcher });
   } catch (err) {
     const isStrictSsl = options.strictTls === true || process.env.STRICT_SSL === "true" || process.env.STRICT_SSL === "1";
     if (!isStrictSsl && isTlsCertError(err)) {
@@ -273,7 +297,7 @@ async function fetchWithTlsFallback(url, options, proxyUrl, impersonation = null
       // ponytail: in-memory insecure agent fallback for self-signed MITM corporate/antivirus certs
       console.warn(`[ProxyFetch] TLS cert verification failed (${err.cause?.code || err.code}), retrying with insecure TLS: ${maskString(String(url))}`);
       const insecureDispatcher = await getDispatcher(proxyUrl, true);
-      return await originalFetch(url, { ...options, dispatcher: insecureDispatcher });
+      return await rawFetch(url, { ...options, dispatcher: insecureDispatcher });
     }
     throw err;
   }
@@ -391,7 +415,7 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
   // for client image URLs) chose the transport: never swap it for a scope,
   // connection or global (HTTPS_PROXY) proxy, which would resolve the name
   // itself and skip the IP check the pin enforces.
-  if (options?.dispatcher) return originalFetch(url, options);
+  if (options?.dispatcher) return rawFetch(url, options);
   // No explicit options: use the connection scope, if any (proxyScope.js).
   if (!proxyOptions) proxyOptions = getScopedProxyOptions();
   const targetUrl = typeof url === "string" ? url : url.toString();
@@ -408,7 +432,7 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
       "x-relay-target": `${parsed.protocol}//${parsed.host}`,
       "x-relay-path": `${parsed.pathname}${parsed.search}`,
     };
-    return originalFetch(vercelRelayUrl, { ...options, headers: relayHeaders });
+    return await rawFetch(vercelRelayUrl, { ...options, headers: relayHeaders });
   }
 
   const connectionProxyUrl = resolveConnectionProxyUrl(targetUrl, proxyOptions);
