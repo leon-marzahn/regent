@@ -41,7 +41,12 @@ describe("v0 management hub", () => {
   it("answers api-call locally with a JSON-string body", async () => {
     getProviderConnectionById.mockResolvedValue({ id: "k1", provider: "kiro" });
     usageGET.mockResolvedValue(
-      Response.json({ quotas: { agentic_request: { used: 42, total: 100, resetAt: "2026-12-01T00:00:00.000Z" } } }),
+      Response.json({
+        quotas: {
+          credit_freetrial: { used: 1, total: 50, resetAt: null },
+          credit: { used: 42, total: 100, resetAt: "2026-12-01T00:00:00.000Z" },
+        },
+      }),
     );
     const res = await POST(...req("POST", "api-call", { body: { auth_index: "k1", method: "GET", url: "https://api.anthropic.com/api/oauth/usage" } }));
     const out = await res.json();

@@ -51,9 +51,15 @@ export async function POST(request, { params }) {
     params: Promise.resolve({ connectionId: id }),
   });
   const usage = await res.json().catch(() => null);
-  const q = usage?.quotas?.agentic_request;
-  if (!res.ok || !q?.total)
-    return hubError(usage?.error || usage?.message || "Kiro usage unavailable");
+  // Kiro's resourceType names the pool (e.g. "credit"), so take the first paid pool with a limit.
+  const quotas = usage?.quotas || {};
+  const q = Object.entries(quotas).find(([k, v]) => !k.endsWith("_freetrial") && v?.total > 0)?.[1];
+  if (!res.ok || !q)
+    return hubError(
+      usage?.error ||
+        usage?.message ||
+        `Kiro usage unavailable (quotas: ${Object.keys(quotas).join(", ") || "none"})`,
+    );
 
   // ponytail: monthly credit pool shown as the 7-day bar; free-trial pool not reported. Add as a `limits` entry if needed.
   return Response.json({
