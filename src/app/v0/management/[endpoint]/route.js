@@ -23,12 +23,17 @@ export async function GET(request, { params }) {
     return Response.json({ error: "Not found" }, { status: 404 });
   const conns = await getProviderConnections({ provider: "kiro" });
   // T3 only accepts claude/codex, so Kiro accounts are listed as "claude".
-  // T3 only displays `email` (chip + label), so send the dashboard's account label there.
+  // T3 only displays `email` (chip + label), so send the label the dashboard's connection row
+  // shows (providers/[id]/ConnectionRow.js). displayName is set by some sign-in flows, not users.
   const files = conns.map((c) => ({
     id: c.id,
     auth_index: c.id,
     provider: "claude",
-    email: c.name?.trim() || c.email?.trim() || c.displayName?.trim() || "Kiro account",
+    email:
+      c.name?.trim() ||
+      c.email?.trim() ||
+      c.displayName?.trim() ||
+      (c.authType === "oauth" ? "OAuth Account" : "API Key"),
     disabled: c.isActive === false,
   }));
   return Response.json({ files });

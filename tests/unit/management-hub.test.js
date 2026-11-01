@@ -33,12 +33,18 @@ describe("v0 management hub", () => {
     getProviderConnections.mockResolvedValue([
       { id: "k1", name: "a@b.c (google)", email: "a@b.c", isActive: true },
       { id: "k2", email: "a@b.c", isActive: false },
-      { id: "k3", isActive: true },
+      { id: "k3", authType: "api_key", isActive: true },
+      { id: "k4", authType: "oauth", isActive: true },
     ]);
     const res = await GET(...req("GET", "auth-files"));
     const file = (id, email, disabled) => ({ id, auth_index: id, provider: "claude", email, disabled });
     expect(await res.json()).toEqual({
-      files: [file("k1", "a@b.c (google)", false), file("k2", "a@b.c", true), file("k3", "Kiro account", false)],
+      files: [
+        file("k1", "a@b.c (google)", false),
+        file("k2", "a@b.c", true),
+        file("k3", "API Key", false),
+        file("k4", "OAuth Account", false),
+      ],
     });
     expect(getProviderConnections).toHaveBeenCalledWith({ provider: "kiro" });
   });
