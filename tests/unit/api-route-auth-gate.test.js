@@ -37,6 +37,9 @@ const PUBLIC = [
   // Deliberately public: the customer view authenticates with the caller's own API key
   // in the handler (src/lib/customerView). Covered by tests/unit/customer-view.test.js.
   /^\/api\/customer\/usage$/,
+  // Deliberately public: the T3 usage hub checks REGENT_MANAGEMENT_KEY in the handler.
+  // Covered by tests/unit/management-hub.test.js.
+  /^\/v0\/management\/x$/,
 ];
 
 function collectRoutes(dir, base = "/api") {
@@ -56,7 +59,8 @@ function collectRoutes(dir, base = "/api") {
 process.env.ALLOWED_HOSTS = "regent.example.com";
 
 const apiDir = path.join(import.meta.dirname, "../../src/app/api");
-const routes = collectRoutes(apiDir).filter((p) => !PUBLIC.some((re) => re.test(p)));
+const v0Dir = path.join(import.meta.dirname, "../../src/app/v0");
+const routes = [...collectRoutes(apiDir), ...collectRoutes(v0Dir, "/v0")].filter((p) => !PUBLIC.some((re) => re.test(p)));
 
 function request(pathname, { cookie, headers = {} } = {}) {
   return {

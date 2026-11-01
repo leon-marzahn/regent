@@ -46,7 +46,10 @@ export async function POST(request, { params }) {
   if (conn?.provider !== "kiro") return hubError("Unknown account");
 
   // Same path as the dashboard: token refresh, connection proxy, auth-expired retry.
-  const res = await getConnectionUsage(request, { params: Promise.resolve({ connectionId: id }) });
+  // Fresh request: T3's query string (e.g. ?force=1) must not reach the usage cache.
+  const res = await getConnectionUsage(new Request("http://localhost/"), {
+    params: Promise.resolve({ connectionId: id }),
+  });
   const usage = await res.json().catch(() => null);
   const q = usage?.quotas?.agentic_request;
   if (!res.ok || !q?.total)
