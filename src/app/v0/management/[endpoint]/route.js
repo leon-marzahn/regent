@@ -23,11 +23,17 @@ export async function GET(request, { params }) {
     return Response.json({ error: "Not found" }, { status: 404 });
   const conns = await getProviderConnections({ provider: "kiro" });
   // T3 only accepts claude/codex, so Kiro accounts are listed as "claude".
+  // T3 only displays `email` (chip + label), so send the label the dashboard's connection row
+  // shows (providers/[id]/ConnectionRow.js). displayName is set by some sign-in flows, not users.
   const files = conns.map((c) => ({
     id: c.id,
     auth_index: c.id,
     provider: "claude",
-    ...(c.email ? { email: c.email } : {}),
+    email:
+      c.name?.trim() ||
+      c.email?.trim() ||
+      c.displayName?.trim() ||
+      (c.authType === "oauth" ? "OAuth Account" : "API Key"),
     disabled: c.isActive === false,
   }));
   return Response.json({ files });
@@ -51,9 +57,15 @@ export async function POST(request, { params }) {
     params: Promise.resolve({ connectionId: id }),
   });
   const usage = await res.json().catch(() => null);
-  const q = usage?.quotas?.agentic_request;
-  if (!res.ok || !q?.total)
-    return hubError(usage?.error || usage?.message || "Kiro usage unavailable");
+  // Kiro's resourceType names the pool (e.g. "credit"), so take the first paid pool with a limit.
+  const quotas = usage?.quotas || {};
+  const q = Object.entries(quotas).find(([k, v]) => !k.endsWith("_freetrial") && v?.total > 0)?.[1];
+  if (!res.ok || !q)
+    return hubError(
+      usage?.error ||
+        usage?.message ||
+        `Kiro usage unavailable (quotas: ${Object.keys(quotas).join(", ") || "none"})`,
+    );
 
   // ponytail: monthly credit pool shown as the 7-day bar; free-trial pool not reported. Add as a `limits` entry if needed.
   return Response.json({

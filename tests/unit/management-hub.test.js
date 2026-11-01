@@ -30,10 +30,21 @@ describe("v0 management hub", () => {
   });
 
   it("lists Kiro accounts as claude auth files", async () => {
-    getProviderConnections.mockResolvedValue([{ id: "k1", email: "a@b.c", isActive: true }]);
+    getProviderConnections.mockResolvedValue([
+      { id: "k1", name: "a@b.c (google)", email: "a@b.c", isActive: true },
+      { id: "k2", email: "a@b.c", isActive: false },
+      { id: "k3", authType: "api_key", isActive: true },
+      { id: "k4", authType: "oauth", isActive: true },
+    ]);
     const res = await GET(...req("GET", "auth-files"));
+    const file = (id, email, disabled) => ({ id, auth_index: id, provider: "claude", email, disabled });
     expect(await res.json()).toEqual({
-      files: [{ id: "k1", auth_index: "k1", provider: "claude", email: "a@b.c", disabled: false }],
+      files: [
+        file("k1", "a@b.c (google)", false),
+        file("k2", "a@b.c", true),
+        file("k3", "API Key", false),
+        file("k4", "OAuth Account", false),
+      ],
     });
     expect(getProviderConnections).toHaveBeenCalledWith({ provider: "kiro" });
   });
@@ -41,7 +52,12 @@ describe("v0 management hub", () => {
   it("answers api-call locally with a JSON-string body", async () => {
     getProviderConnectionById.mockResolvedValue({ id: "k1", provider: "kiro" });
     usageGET.mockResolvedValue(
-      Response.json({ quotas: { agentic_request: { used: 42, total: 100, resetAt: "2026-12-01T00:00:00.000Z" } } }),
+      Response.json({
+        quotas: {
+          credit_freetrial: { used: 1, total: 50, resetAt: null },
+          credit: { used: 42, total: 100, resetAt: "2026-12-01T00:00:00.000Z" },
+        },
+      }),
     );
     const res = await POST(...req("POST", "api-call", { body: { auth_index: "k1", method: "GET", url: "https://api.anthropic.com/api/oauth/usage" } }));
     const out = await res.json();
@@ -58,5 +74,13 @@ describe("v0 management hub", () => {
     usageGET.mockResolvedValue(Response.json({ message: "Kiro quota API rejected the current token.", quotas: {} }));
     const out = await (await POST(...req("POST", "api-call", { body: { auth_index: "k1" } }))).json();
     expect(out.status_code).toBe(502);
+  });
+
+  it("names the quota keys when no pool has a limit", async () => {
+    getProviderConnectionById.mockResolvedValue({ id: "k1", provider: "kiro" });
+    usageGET.mockResolvedValue(Response.json({ quotas: { credit: { used: 0, total: 0 } } }));
+    const out = await (await POST(...req("POST", "api-call", { body: { auth_index: "k1" } }))).json();
+    expect(out.status_code).toBe(502);
+    expect(JSON.parse(out.body).error).toContain("quotas: credit");
   });
 });
