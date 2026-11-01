@@ -1,4 +1,9 @@
 
+# v102.3.0 (2026-11-01)
+
+## Features
+- **usage**: CLIProxyAPI-style usage hub for T3 Code (#160)
+
 # v102.2.2 (2026-10-27)
 
 ## Fixes
