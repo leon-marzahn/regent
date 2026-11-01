@@ -64,4 +64,12 @@ describe("v0 management hub", () => {
     const out = await (await POST(...req("POST", "api-call", { body: { auth_index: "k1" } }))).json();
     expect(out.status_code).toBe(502);
   });
+
+  it("names the quota keys when no pool has a limit", async () => {
+    getProviderConnectionById.mockResolvedValue({ id: "k1", provider: "kiro" });
+    usageGET.mockResolvedValue(Response.json({ quotas: { credit: { used: 0, total: 0 } } }));
+    const out = await (await POST(...req("POST", "api-call", { body: { auth_index: "k1" } }))).json();
+    expect(out.status_code).toBe(502);
+    expect(JSON.parse(out.body).error).toContain("quotas: credit");
+  });
 });
