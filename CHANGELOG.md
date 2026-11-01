@@ -1,4 +1,9 @@
 
+# v102.3.1 (2026-11-01)
+
+## Fixes
+- **usage**: Read the hub's Kiro pool from any quota key and label accounts (#162)
+
 # v102.3.0 (2026-11-01)
 
 ## Features
