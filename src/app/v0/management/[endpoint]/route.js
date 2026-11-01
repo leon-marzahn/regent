@@ -23,11 +23,12 @@ export async function GET(request, { params }) {
     return Response.json({ error: "Not found" }, { status: 404 });
   const conns = await getProviderConnections({ provider: "kiro" });
   // T3 only accepts claude/codex, so Kiro accounts are listed as "claude".
+  // T3 only displays `email` (chip + label), so send the dashboard's account label there.
   const files = conns.map((c) => ({
     id: c.id,
     auth_index: c.id,
     provider: "claude",
-    ...(c.email ? { email: c.email } : {}),
+    email: c.name?.trim() || c.email?.trim() || c.displayName?.trim() || "Kiro account",
     disabled: c.isActive === false,
   }));
   return Response.json({ files });
