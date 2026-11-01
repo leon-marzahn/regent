@@ -300,7 +300,8 @@ describe("429 response", () => {
   it("is OpenAI-shaped with code budget_exceeded and no internal details", async () => {
     const { enforceBudget } = await import("@/sse/services/budget.js");
     await setBudget(repo.keyScope(keyA.id), { spendLimit: 1, hardStop: true });
-    usage(keyA.key, 2);
+    // enforceBudget reads the real clock, so the spend must be in the current period, not NOW's.
+    usage(keyA.key, 2, { at: new Date().toISOString() });
     const res = await enforceBudget(
       new Request("http://x/v1/chat/completions", {
         headers: { Authorization: `Bearer ${keyA.key}` },
