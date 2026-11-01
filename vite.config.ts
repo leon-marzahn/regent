@@ -131,6 +131,7 @@ export default defineConfig({
       "!/src/app",
       "/src/app/*",
       "!/src/app/customer",
+      "!/src/app/v0",
       "!/src/app/dashboard",
       "/src/app/dashboard/*",
       "!/src/app/dashboard/settings",
