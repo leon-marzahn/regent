@@ -1,4 +1,9 @@
 
+# v102.3.2 (2026-11-04)
+
+## Fixes
+- **kiro**: Respect max_tokens and clamp thinking off to low (#164)
+
 # v102.3.1 (2026-11-01)
 
 ## Fixes
