@@ -623,7 +623,7 @@ describe("openaiToKiroRequest", () => {
       expect(second.conversationState.currentMessage.userInputMessage.content).toContain("second turn");
     });
 
-    it("does not inject thinking prefix for reasoning_effort none", () => {
+    it("clamps reasoning_effort none to adaptive low without a thinking prefix", () => {
       const body = {
         reasoning_effort: "none",
         messages: [{ role: "user", content: "Do not think" }]
@@ -633,7 +633,11 @@ describe("openaiToKiroRequest", () => {
 
       expect(contentOf(result)).not.toContain("<thinking_mode>enabled</thinking_mode>");
       expect(contentOf(result)).not.toContain("<max_thinking_length>");
-      expect(result.additionalModelRequestFields).toBeUndefined();
+      // Kiro rejects thinking "disabled"; low is the closest it allows.
+      expect(result.additionalModelRequestFields).toEqual({
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "low" },
+      });
     });
   });
 });
