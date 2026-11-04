@@ -48,11 +48,19 @@ describe("OpenAI → Kiro", () => {
     ).not.toThrow();
   });
 
-  // openai-to-kiro.js:309 — maxTokens hardcoded to 32000, ignores body.max_tokens
-  // KNOWN BUG
-  it.fails("respects client max_tokens", () => {
+  it("respects client max_tokens", () => {
     const out = O2K({ max_tokens: 100, messages: [{ role: "user", content: "hi" }] });
     expect(out.inferenceConfig?.maxTokens, "client max_tokens ignored").toBe(100);
+  });
+
+  it("prefers max_completion_tokens over max_tokens", () => {
+    const out = O2K({ max_completion_tokens: 200, max_tokens: 100, messages: [{ role: "user", content: "hi" }] });
+    expect(out.inferenceConfig?.maxTokens).toBe(200);
+  });
+
+  it("defaults maxTokens to 32000 when the client sends none", () => {
+    const out = O2K({ messages: [{ role: "user", content: "hi" }] });
+    expect(out.inferenceConfig?.maxTokens).toBe(32000);
   });
 
   // openai-to-kiro.js:132-134 — remote http image becomes "[Image: url]" text (lost)

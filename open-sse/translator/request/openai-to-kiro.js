@@ -313,7 +313,7 @@ function convertMessages(messages, model) {
 export function openaiToKiroRequest(model, body, stream, credentials) {
   const messages = body.messages || [];
   const tools = body.tools || [];
-  const maxTokens = 32000;
+  const maxTokens = body.max_completion_tokens || body.max_tokens || 32000;
   const temperature = body.temperature;
   const topP = body.top_p;
 
@@ -430,6 +430,8 @@ export function openaiToKiroRequest(model, body, stream, credentials) {
   if (maxTokens || temperature !== undefined || topP !== undefined) {
     payload.inferenceConfig = {};
     if (maxTokens) payload.inferenceConfig.maxTokens = maxTokens;
+    // Kiro accepts temperature but ignores it (live test 2026-11: temp 0 and 1 equally varied).
+    // Forwarded anyway: harmless, and it takes effect if Kiro starts honoring it.
     if (temperature !== undefined) payload.inferenceConfig.temperature = temperature;
     if (topP !== undefined) payload.inferenceConfig.topP = topP;
   }

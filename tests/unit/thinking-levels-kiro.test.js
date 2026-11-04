@@ -32,4 +32,27 @@ describe("getThinkingLevels for Kiro", () => {
     expect(applyThinking("claude", "claude-opus-5.5(xhigh)", { messages: [] }, "claude").output_config?.effort).toBe("xhigh");
     expect(applyThinking("claude", "claude-opus-4.6(xhigh)", { messages: [] }, "claude").output_config?.effort).toBe("high");
   });
+
+  // Kiro only accepts thinking.type "adaptive" (400 on "disabled"), so "off" clamps to low
+  // instead of omitting the fields and getting Kiro's default effort.
+  it.each([
+    ["reasoning_effort none", { reasoning_effort: "none" }],
+    ["reasoning.effort off", { reasoning: { effort: "off" } }],
+    ["output_config.effort minimal", { output_config: { effort: "minimal" } }],
+    ["Claude thinking disabled", { thinking: { type: "disabled" } }],
+    ["thinking disabled beats an effort", { thinking: { type: "disabled" }, output_config: { effort: "high" } }],
+  ])("clamps %s to adaptive low", (_, body) => {
+    expect(buildKiroAdditionalModelRequestFieldsForModel(body, "claude-opus-5.5")).toEqual({
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: "low" },
+    });
+  });
+
+  it("still omits the fields when the client asks nothing", () => {
+    expect(buildKiroAdditionalModelRequestFieldsForModel({}, "claude-opus-5.5")).toBeUndefined();
+  });
+
+  it("does not send effort fields to legacy 4.5 models even when off is asked", () => {
+    expect(buildKiroAdditionalModelRequestFieldsForModel({ reasoning_effort: "none" }, "claude-sonnet-4.5")).toBeUndefined();
+  });
 });

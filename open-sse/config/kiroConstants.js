@@ -267,14 +267,20 @@ function kiroModelLacksXhigh(model) {
   return !v || (v.major === 4 && v.minor !== null && v.minor <= 6);
 }
 
+// Kiro cannot turn Claude thinking off: its schema only accepts thinking.type
+// "adaptive" (live 400 on "disabled", 2026-11). Omitting the fields falls back to
+// Kiro's default effort, so an explicit "off" maps to the lowest tier instead.
+const KIRO_MIN_EFFORT = "low";
+
 export function extractKiroEffortLevel(body, model) {
+  if (body?.thinking?.type === "disabled") return KIRO_MIN_EFFORT;
   const effort =
     body?.output_config?.effort ??
     body?.reasoning_effort ??
     (typeof body?.reasoning === "object" ? body.reasoning?.effort : null);
   if (typeof effort !== "string") return null;
   const normalized = effort.toLowerCase();
-  if (normalized === "none" || normalized === "off" || normalized === "disabled") return null;
+  if (["none", "off", "disabled", "minimal"].includes(normalized)) return KIRO_MIN_EFFORT;
   if (normalized === "xhigh") return kiroModelLacksXhigh(model) ? "high" : "xhigh";
   if (normalized === "max") return "max";
   if (["low", "medium", "high"].includes(normalized)) return normalized;
