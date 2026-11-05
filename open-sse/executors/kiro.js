@@ -359,6 +359,8 @@ export class KiroExecutor extends BaseExecutor {
    * classify the status, and trigger account fallback/cooldown.
    */
   async execute(args) {
+    // Built before sending: the send time decides which earlier requests can count as cached.
+    const cacheContext = buildKiroCacheContext(args.body, args.credentials?.connectionId);
     let result = await super.execute(args);
     // A replayed reasoning signature Kiro no longer accepts (edited/compacted
     // history, other account) fails the whole turn; drop reasoning and resend once.
@@ -388,7 +390,7 @@ export class KiroExecutor extends BaseExecutor {
         // An invalid tool_call with zero output is retried once upstream (plain
         // re-send; the one-shot guard lives in the transformer).
         result.response = this.transformEventStreamToSSE(result.response, args.model, {
-          cacheContext: buildKiroCacheContext(args.body, args.credentials?.connectionId),
+          cacheContext,
           retryUpstream: async () => {
             const retry = await BaseExecutor.prototype.execute.call(this, {
               ...args,
@@ -400,13 +402,13 @@ export class KiroExecutor extends BaseExecutor {
       } else {
         // JSON clients already wait for the complete response, so retain the
         // fail-closed terminal validation and bounded recovery path for them.
-        this.attachIntegrityGate(result, args);
+        this.attachIntegrityGate(result, args, cacheContext);
       }
     }
     return result;
   }
 
-  attachIntegrityGate(result, args) {
+  attachIntegrityGate(result, args, cacheContext = buildKiroCacheContext(args.body, args.credentials?.connectionId)) {
     const abortController = new AbortController();
     const maxBytes = envPositiveInt("KIRO_TOOL_CALL_REPAIR_BUFFER_MAX_BYTES", KIRO_REPAIR_BUFFER_MAX_BYTES);
     const legacyTimeout = envPositiveInt("KIRO_TOOL_CALL_REPAIR_TIMEOUT_MS", STREAM_FIRST_CHUNK_TIMEOUT_MS);
@@ -439,7 +441,7 @@ export class KiroExecutor extends BaseExecutor {
             ttftTimeoutMs,
             stallTimeoutMs,
             repairEnabled,
-            cacheContext: buildKiroCacheContext(args.body, args.credentials?.connectionId)
+            cacheContext
           });
           if (abortController.signal.aborted) throw makeAbortError(abortController.signal.reason);
           controller.enqueue(bytes);

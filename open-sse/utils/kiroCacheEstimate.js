@@ -1,17 +1,21 @@
-// Kiro never reports cache counts, but it caches by prefix, keyed on content (not on any
-// session id) and only for a few minutes. So the estimate follows the content:
-//   - key: connection, model and the conversation's first message (system prompt included).
-//     The first message is the same on every turn (session replay freezes it), so every turn
-//     of a chat, and a new chat that opens identically, land on one entry.
-//   - what is cached: everything the previous request sent, up to where the two diverge:
-//       - time context off: the previous last user message comes back unchanged.
-//       - time context on: that message went out with a timestamp and comes back without one,
-//         so the cache stops at the assistant message before it. Exception: the first message,
-//         which replay keeps frozen, timestamp included.
-//   - the newest user message is new, so cached never exceeds prompt minus that message.
-//     Exception: an exact repeat (same history, same last message), which Kiro serves whole.
-//   - Kiro drops an idle prefix after about five minutes (measured between 3.5 and 6 minutes,
-//     and a hit extends it), so an entry older than that no longer counts.
+// Kiro never reports cache counts, so this estimates them. What Kiro caches was measured
+// from the credits it bills (2026-11, claude-opus-5.5): a cached input token costs about
+// 27% of an uncached one, so the credits show how much of a prompt was served from cache.
+//   - Kiro caches by content, per account, and only serves a prefix that an earlier
+//     request sent in full. It is not the previous turn: the newest three turns (six
+//     history messages) are always billed in full, even when every message is unchanged.
+//     A chat growing ~6.6k tokens a turn paid full price on turns 1-3, then turn N was
+//     cached up to what turn N-3 sent.
+//   - So a request is counted as cached up to the longest earlier request it continues,
+//     as long as that request is at least three turns back. Matching is on content
+//     (chained hashes of the messages), never on a session id, so concurrent chats that
+//     share an opening (subagents) only share what they really have in common, and a
+//     request still in flight when this one started never counts.
+//   - An exact repeat (same history, same last message) is served whole.
+//   - Kiro drops an idle prefix after about five minutes (measured between 3.5 and 6
+//     minutes, and a hit extends it), so an older entry no longer counts.
+//   - Not modeled, so this under-reports there: one chat whose first message alone was
+//     64k tokens was fully cached from turn 2. Smaller openings (9k, 14k) were not.
 // Prompt sizes are themselves approximations (context percentage), so this is an estimate.
 // State is in memory and a restart simply forgets it (cached = 0).
 
@@ -19,41 +23,55 @@ import { createHash } from "node:crypto";
 
 const MAX_ENTRIES = 5000;
 const TTL_MS = 5 * 60 * 1000;
-const TIME_CONTEXT_RE = /\[Context: Current time is /;
+// Three turns of a user message and an assistant reply that Kiro always bills in full.
+const UNCACHED_TAIL_MESSAGES = 6;
 
-const previous = new Map(); // key -> { prompt, timeStrippedTokens, lastHash, historyLength, at }
+const sent = new Map(); // hash of a full request -> { prompt, startedAt, at }
 
-const approxTokens = (text) => Math.ceil((text ? text.length : 0) / 4);
 const digest = (text) => createHash("sha256").update(text).digest("hex").slice(0, 16);
 
+// What the model sees of a message. Request metadata (origin, the tool list on the
+// current message, modelId) and reasoning are left out: they differ between the turn a
+// message was current and the turns that replay it in history.
+function messageDigest(item) {
+  const user = item?.userInputMessage;
+  if (user) {
+    const ctx = user.userInputMessageContext;
+    return digest(JSON.stringify(["user", user.content ?? "", ctx?.toolResults ?? null, user.images ?? null]));
+  }
+  const assistant = item?.assistantResponseMessage;
+  return digest(JSON.stringify(["assistant", assistant?.content ?? "", assistant?.toolUses ?? null]));
+}
+
 /**
- * Pull what the estimator needs out of the Kiro payload sent upstream.
+ * Pull what the estimator needs out of the Kiro payload sent upstream. Call it when the
+ * request is sent: its time decides which earlier requests could have warmed the cache.
  * @param {object} body Kiro request body
  * @param {string} [scope] connection id; Kiro's cache is per account
- * @returns {{key: string, lastHash: string, lastUserTokens: number, timeAdded: boolean,
- *   isFirstTurn: boolean, historyLength: number} | null}
+ * @returns {{prefixHashes: string[], requestHash: string, startedAt: number} | null}
  */
 export function buildKiroCacheContext(body, scope = "") {
   const state = body?.conversationState;
   const message = state?.currentMessage?.userInputMessage;
   if (!message) return null;
   const history = Array.isArray(state.history) ? state.history : [];
-  const start = history.find((h) => h?.userInputMessage)?.userInputMessage || message;
-  const startText = typeof start.content === "string" ? start.content : "";
-  if (!startText) return null;
-  const content = typeof message.content === "string" ? message.content : "";
-  const toolResults = message.userInputMessageContext?.toolResults;
-  const resultText = Array.isArray(toolResults) ? JSON.stringify(toolResults) : "";
+  const modelId = message.modelId || history.find((h) => h?.userInputMessage?.modelId)?.userInputMessage.modelId || "";
+  // prefixHashes[i] identifies history[0..i]; it equals the requestHash of the earlier
+  // request whose last (current) message was history[i].
+  let chain = digest(`${scope}\n${modelId}`);
+  const prefixHashes = history.map((item) => (chain = digest(`${chain}\n${messageDigest(item)}`)));
   return {
-    key: digest(`${scope}\n${message.modelId || start.modelId || ""}\n${startText}`),
-    lastHash: digest(`${content}\n${resultText}`),
-    lastUserTokens: approxTokens(content) + approxTokens(resultText),
-    timeAdded: TIME_CONTEXT_RE.test(content),
-    // Session replay freezes the first message (timestamp included), so it still
-    // matches the cache on the next turn. Only later messages lose their stamp.
-    isFirstTurn: history.length === 0,
-    historyLength: history.length,
+    prefixHashes,
+    requestHash: digest(`${chain}\n${messageDigest(state.currentMessage)}`),
+    startedAt: Date.now(),
   };
+}
+
+// An earlier request that could have warmed Kiro's cache for one starting at `startedAt`.
+function warmEntry(hash, startedAt) {
+  const entry = sent.get(hash);
+  if (!entry || entry.startedAt >= startedAt || startedAt - entry.at > TTL_MS) return null;
+  return entry;
 }
 
 /**
@@ -62,29 +80,23 @@ export function buildKiroCacheContext(body, scope = "") {
  * @returns {number} estimated cached prompt tokens (0 when nothing earlier is known)
  */
 export function estimateKiroCachedTokens(context, promptTokens) {
-  if (!context?.key || !(promptTokens > 0)) return 0;
-  const now = Date.now();
-  const before = previous.get(context.key);
+  if (!context?.requestHash || !(promptTokens > 0)) return 0;
+  const { prefixHashes, requestHash, startedAt } = context;
 
-  previous.delete(context.key);
-  if (previous.size >= MAX_ENTRIES) previous.delete(previous.keys().next().value);
-  previous.set(context.key, {
-    prompt: promptTokens,
-    timeStrippedTokens: context.timeAdded && !context.isFirstTurn ? context.lastUserTokens : 0,
-    lastHash: context.lastHash,
-    historyLength: context.historyLength,
-    at: now,
-  });
+  let hit = warmEntry(requestHash, startedAt);
+  for (let i = prefixHashes.length - UNCACHED_TAIL_MESSAGES; !hit && i >= 0; i--) {
+    hit = warmEntry(prefixHashes[i], startedAt);
+  }
+  if (hit) hit.at = startedAt; // a hit keeps Kiro's prefix alive
 
-  if (!before || now - before.at > TTL_MS) return 0;
-  const repeat = before.lastHash === context.lastHash && before.historyLength === context.historyLength;
-  if (repeat) return Math.max(0, Math.min(before.prompt, promptTokens));
-  const cached = before.prompt - before.timeStrippedTokens;
-  // The newest user message is new, so a changed request can never be a full hit.
-  return Math.max(0, Math.min(cached, promptTokens - context.lastUserTokens));
+  sent.delete(requestHash);
+  if (sent.size >= MAX_ENTRIES) sent.delete(sent.keys().next().value);
+  sent.set(requestHash, { prompt: promptTokens, startedAt, at: startedAt });
+
+  return hit ? Math.min(hit.prompt, promptTokens) : 0;
 }
 
 /** Test helper. */
 export function resetKiroCacheEstimator() {
-  previous.clear();
+  sent.clear();
 }

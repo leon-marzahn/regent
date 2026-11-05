@@ -5,161 +5,145 @@ import {
   resetKiroCacheEstimator,
 } from "../../open-sse/utils/kiroCacheEstimate.js";
 
-const TIME = "[Context: Current time is 2026-10-08T22:00:00.000Z]";
-const START = `system prompt and first message ${"s".repeat(400)}`;
+const MIN = 60 * 1000;
+const OPENING = `system prompt and first message ${"s".repeat(400)}`;
 
-const user = (content, modelId = "m") => ({ userInputMessage: { content, modelId } });
-const assistant = (content) => ({ assistantResponseMessage: { content } });
-const current = (content, modelId, toolResults) => ({
-  userInputMessage: {
-    content,
-    modelId,
-    ...(toolResults && { userInputMessageContext: { toolResults } }),
-  },
-});
+const user = (content, extra = {}) => ({ userInputMessage: { content, modelId: "m", ...extra } });
+const assistant = (content, extra = {}) => ({ assistantResponseMessage: { content, ...extra } });
 
-// Turn 1: the only message is the session start, so there is no history.
-const first = (start = START, modelId = "m", scope) =>
-  buildKiroCacheContext({ conversationState: { history: [], currentMessage: current(start, modelId) } }, scope);
+// The Kiro body of turn `n` of one chat: n-1 finished exchanges, then the newest user message.
+function turn(n, { opening = OPENING, tag = "", model = "m" } = {}) {
+  const say = (k) => (k === 1 ? opening : `${tag}user ${k}`);
+  const history = [];
+  for (let k = 1; k < n; k++) history.push(user(say(k), { modelId: model }), assistant(`${tag}reply ${k}`));
+  return { conversationState: { history, currentMessage: user(say(n), { modelId: model }) } };
+}
 
-// Later turn: the frozen session start leads the history, then `pairs` finished exchanges.
-const later = (last, { start = START, pairs = 1, modelId = "m", toolResults, scope } = {}) => {
-  const history = [user(start, modelId), assistant("a")];
-  for (let i = 1; i < pairs; i++) history.push(user(`u${i}`, modelId), assistant("a"));
-  return buildKiroCacheContext(
-    { conversationState: { history, currentMessage: current(last, modelId, toolResults) } },
-    scope
-  );
-};
+const ctx = (body, scope = "conn-1") => buildKiroCacheContext(body, scope);
+// Prompt sizes of a chat that grows 6.6k tokens a turn, as in the live measurement.
+const promptOf = (n) => 9000 + (n - 1) * 6600;
+
+// Sends turns `from`..`to` of a chat a second apart; returns the estimate of each.
+function runChat(from, to, options = {}) {
+  const out = {};
+  for (let n = from; n <= to; n++) {
+    vi.advanceTimersByTime(1000);
+    out[n] = estimateKiroCachedTokens(ctx(turn(n, options), options.scope), promptOf(n));
+  }
+  return out;
+}
 
 describe("buildKiroCacheContext", () => {
-  it("returns null without a current message or a first message", () => {
+  it("returns null without a current message", () => {
     expect(buildKiroCacheContext({})).toBeNull();
     expect(buildKiroCacheContext(null)).toBeNull();
-    expect(first("")).toBeNull();
   });
 
-  it("detects the injected time context and sizes the last user message", () => {
-    const withTime = later(`${TIME}\n\n${"x".repeat(400)}`);
-    expect(withTime.timeAdded).toBe(true);
-    expect(withTime.lastUserTokens).toBeGreaterThan(100);
-    expect(later("x".repeat(400)).timeAdded).toBe(false);
+  it("gives a history message the same hash as the request it was current in", () => {
+    const earlier = ctx(turn(1));
+    const later = ctx(turn(2));
+    expect(later.prefixHashes[0]).toBe(earlier.requestHash);
   });
 
-  it("counts tool results as part of the last user message", () => {
-    const ctx = later("ok", { toolResults: [{ toolUseId: "t1", content: [{ text: "y".repeat(4000) }] }] });
-    expect(ctx.lastUserTokens).toBeGreaterThan(900);
+  it("ignores request metadata and reasoning that change once a message is history", () => {
+    const sent = { conversationState: { history: [], currentMessage: user(OPENING, {
+      origin: "AI_EDITOR", userInputMessageContext: { tools: [{ toolSpecification: { name: "Read" } }] },
+    }) } };
+    const replayed = { conversationState: { history: [
+      { userInputMessage: { content: OPENING } },
+      assistant("reply 1", { reasoningContent: { reasoningText: { text: "hmm", signature: "sig" } } }),
+    ], currentMessage: user("user 2") } };
+    expect(ctx(replayed).prefixHashes[0]).toBe(ctx(sent).requestHash);
   });
 
-  it("keys every turn of a chat on its first message, connection and model", () => {
-    const key = first().key;
-    expect(later("hi").key).toBe(key);
-    expect(later("something else", { pairs: 3 }).key).toBe(key);
-    expect(first(`${START} other`).key).not.toBe(key);
-    expect(first(START, "m2").key).not.toBe(key);
-    expect(first(START, "m", "conn-2").key).not.toBe(key);
+  it("separates connections and models", () => {
+    const base = ctx(turn(1)).requestHash;
+    expect(ctx(turn(1), "conn-2").requestHash).not.toBe(base);
+    expect(ctx(turn(1, { model: "m2" })).requestHash).not.toBe(base);
   });
 });
 
 describe("estimateKiroCachedTokens", () => {
-  beforeEach(() => resetKiroCacheEstimator());
+  beforeEach(() => {
+    resetKiroCacheEstimator();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-05T22:00:00Z"));
+  });
+  afterEach(() => vi.useRealTimers());
 
-  it("reports nothing for the first request of a conversation", () => {
-    expect(estimateKiroCachedTokens(first(), 20000)).toBe(0);
+  it("bills the newest three turns in full, as measured on Kiro", () => {
+    const cached = runChat(1, 7);
+    expect([cached[1], cached[2], cached[3]]).toEqual([0, 0, 0]);
+    expect(cached[4]).toBe(promptOf(1));
+    expect(cached[5]).toBe(promptOf(2));
+    expect(cached[7]).toBe(promptOf(4));
   });
 
-  it("caches the whole previous prompt when no time context was added", () => {
-    estimateKiroCachedTokens(first(), 20000);
-    expect(estimateKiroCachedTokens(later("x".repeat(400)), 20600)).toBe(20000);
+  it("falls back to an older request when the one three turns back was not seen", () => {
+    runChat(1, 2);
+    vi.advanceTimersByTime(1000);
+    expect(estimateKiroCachedTokens(ctx(turn(6)), promptOf(6))).toBe(promptOf(2));
   });
 
-  it("excludes the previous last user message when it carried a timestamp", () => {
-    const stamped = later(`${TIME}\n\n${"x".repeat(4000)}`);
-    estimateKiroCachedTokens(stamped, 20000);
-    expect(estimateKiroCachedTokens(later("next", { pairs: 2 }), 21500)).toBe(20000 - stamped.lastUserTokens);
+  it("counts nothing once an earlier message changed", () => {
+    runChat(1, 3);
+    const edited = turn(5);
+    edited.conversationState.history[0] = user(`[Context: Current time is 2026-11-05T21:59:00.000Z]\n\n${OPENING}`);
+    expect(estimateKiroCachedTokens(ctx(edited), promptOf(5))).toBe(0);
   });
 
-  it("keeps the first message cached even with a timestamp (replay freezes it)", () => {
-    const stampedStart = `${TIME}\n\n${"x".repeat(4000)}`;
-    const turn1 = first(stampedStart);
-    expect(turn1.isFirstTurn).toBe(true);
-    estimateKiroCachedTokens(turn1, 7353);
-    expect(estimateKiroCachedTokens(later("x".repeat(400), { start: stampedStart }), 7500)).toBe(7353);
+  it("serves an exact repeat whole", () => {
+    runChat(1, 3);
+    vi.advanceTimersByTime(1000);
+    expect(estimateKiroCachedTokens(ctx(turn(3)), promptOf(3))).toBe(promptOf(3));
   });
 
-  it("never reports a full hit for a changed request: the newest message is uncached", () => {
-    estimateKiroCachedTokens(first(), 20000);
-    // 400 chars of new user message = 100 tokens
-    expect(estimateKiroCachedTokens(later("x".repeat(400)), 15000)).toBe(14900);
+  it("never counts a request that was still in flight when this one started", () => {
+    // Two subagents with the same opening, sent together (the hub's parallel pairs).
+    const a = ctx(turn(1, { tag: "a" }));
+    const b = ctx(turn(1, { tag: "b" }));
+    expect(estimateKiroCachedTokens(a, 18000)).toBe(0);
+    expect(estimateKiroCachedTokens(b, 18200)).toBe(0);
   });
 
-  it("caps a prompt that shrank below the previous one", () => {
-    estimateKiroCachedTokens(first(), 144619);
-    expect(estimateKiroCachedTokens(later("x".repeat(400)), 144108)).toBe(144008);
+  it("lets chats that share an opening share only that opening", () => {
+    runChat(1, 4, { tag: "a" });
+    vi.advanceTimersByTime(1000);
+    // Chat b's turn 4 continues chat a's turn 1 (same opening), nothing more.
+    expect(estimateKiroCachedTokens(ctx(turn(4, { tag: "b" })), promptOf(4))).toBe(promptOf(1));
   });
 
-  it("keeps chats with different first messages separate", () => {
-    estimateKiroCachedTokens(first("one"), 20000);
-    expect(estimateKiroCachedTokens(first("two"), 20500)).toBe(0);
+  it("keeps connections apart", () => {
+    runChat(1, 3, { scope: "conn-1" });
+    vi.advanceTimersByTime(1000);
+    expect(estimateKiroCachedTokens(ctx(turn(4), "conn-2"), promptOf(4))).toBe(0);
   });
 
-  it("counts a new chat that opens identically as cached", () => {
-    estimateKiroCachedTokens(first(), 87274);
-    // exact repeat of the opening request: Kiro serves it whole
-    expect(estimateKiroCachedTokens(first(), 87274)).toBe(87274);
-  });
-
-  it("treats an exact repeat as a full hit, a changed request as not", () => {
-    estimateKiroCachedTokens(later("hello"), 20000);
-    expect(estimateKiroCachedTokens(later("hello"), 20000)).toBe(20000);
-    expect(estimateKiroCachedTokens(later("hello again"), 20000)).toBeLessThan(20000);
-  });
-
-  it("caches only the previous prompt when the request grew", () => {
-    estimateKiroCachedTokens(later("hello"), 20000);
-    // same last message but a longer history is not a repeat; only the old 20000 are cached
-    expect(estimateKiroCachedTokens(later("hello", { pairs: 2 }), 20100)).toBe(20000);
+  it("caps the estimate at this request's prompt", () => {
+    estimateKiroCachedTokens(ctx(turn(1)), 50000);
+    vi.advanceTimersByTime(1000);
+    expect(estimateKiroCachedTokens(ctx(turn(1)), 40000)).toBe(40000);
   });
 
   it("returns 0 without context or prompt tokens", () => {
     expect(estimateKiroCachedTokens(null, 20000)).toBe(0);
-    expect(estimateKiroCachedTokens(first(), 0)).toBe(0);
-    expect(estimateKiroCachedTokens(first(), undefined)).toBe(0);
+    expect(estimateKiroCachedTokens(ctx(turn(1)), 0)).toBe(0);
+    expect(estimateKiroCachedTokens(ctx(turn(1)), undefined)).toBe(0);
   });
 
   describe("cache lifetime", () => {
-    const MIN = 60 * 1000;
-    beforeEach(() => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date("2026-10-09T10:00:00Z"));
-    });
-    afterEach(() => vi.useRealTimers());
-
-    it("counts a follow-up inside five minutes", () => {
-      estimateKiroCachedTokens(first(), 20000);
-      vi.advanceTimersByTime(4 * MIN);
-      expect(estimateKiroCachedTokens(later("x".repeat(400)), 20600)).toBe(20000);
-    });
-
-    it("reports 0 once the entry is older than five minutes", () => {
-      estimateKiroCachedTokens(first(), 20000);
+    it("drops a prefix idle for more than five minutes", () => {
+      runChat(1, 3);
       vi.advanceTimersByTime(6 * MIN);
-      expect(estimateKiroCachedTokens(later("x".repeat(400)), 20600)).toBe(0);
+      expect(estimateKiroCachedTokens(ctx(turn(4)), promptOf(4))).toBe(0);
     });
 
     it("lets a hit extend the lifetime", () => {
-      estimateKiroCachedTokens(first(), 20000);
+      estimateKiroCachedTokens(ctx(turn(1)), promptOf(1));
       vi.advanceTimersByTime(4 * MIN);
-      estimateKiroCachedTokens(later("x".repeat(400)), 20600);
+      expect(estimateKiroCachedTokens(ctx(turn(4)), promptOf(4))).toBe(promptOf(1));
       vi.advanceTimersByTime(4 * MIN);
-      expect(estimateKiroCachedTokens(later("x".repeat(400), { pairs: 2 }), 21200)).toBe(20600);
-    });
-
-    it("starts over after an expired entry, so the next turn counts again", () => {
-      estimateKiroCachedTokens(first(), 20000);
-      vi.advanceTimersByTime(10 * MIN);
-      estimateKiroCachedTokens(later("x".repeat(400)), 20600);
-      expect(estimateKiroCachedTokens(later("x".repeat(400), { pairs: 2 }), 21200)).toBe(20600);
+      expect(estimateKiroCachedTokens(ctx(turn(5)), promptOf(5))).toBe(promptOf(1));
     });
   });
 });
