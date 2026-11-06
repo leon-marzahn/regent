@@ -10,6 +10,7 @@ import { getDefaultModel } from "open-sse/config/providerModels.js";
 import { probeBedrockCredentials } from "open-sse/executors/bedrock.js";
 import { resolveOllamaLocalHost, PROVIDERS } from "open-sse/config/providers.js";
 import { CODEX_CLI_VERSION } from "open-sse/config/appConstants.js";
+import { AWS_REGION_PATTERN } from "open-sse/config/awsConstants.js";
 import { GROK_CLI_PAGER_USER_AGENT, GROK_CLI_VERSION } from "open-sse/config/grokCli.js";
 import {
   NOUS_CHAT_COMPLETIONS_URL,
@@ -312,7 +313,9 @@ async function refreshOAuthToken(connection) {
       const clientSecret = psd.clientSecret || connection.clientSecret;
       const region = psd.region || connection.region;
       if (clientId && clientSecret) {
-        const endpoint = `https://oidc.${region || "us-east-1"}.amazonaws.com/token`;
+        // The stored region becomes the OIDC host; only a well-formed region is spliced in.
+        const oidcRegion = typeof region === "string" && AWS_REGION_PATTERN.test(region) ? region : "us-east-1";
+        const endpoint = `https://oidc.${oidcRegion}.amazonaws.com/token`;
         const response = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
