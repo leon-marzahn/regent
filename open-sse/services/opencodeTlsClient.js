@@ -12,6 +12,7 @@
 // fetch and stays subject to the gate rather than failing the request here.
 
 import { loadRuntimeDep } from "./lazyRuntime.js";
+import { redactUserinfo } from "../utils/tlsImpersonation.js";
 
 // BoringSSL/Chrome-family cipher list the upstream accepts, in the order Bun
 // sends it. Only the list's hash is compared, so this must stay verbatim.
@@ -37,7 +38,15 @@ const OPENCODE_CIPHER_LIST = [
 
 const DEFAULT_TIMEOUT_MS = 120000;
 
-let sessionPromise = null;
+// A wreq-js session pins one proxy at creation ("Session proxy cannot be
+// changed after creation"), so the cache must be keyed by proxy URL: a proxy
+// switch hands out a fresh session instead of silently reusing the old one's
+// tunnel. The key is the full URL, credentials included: two pool entries on
+// one host:port with different users are different egress identities. The
+// key stays in memory; only normalizeProxyKey's label is ever shown. The key
+// "" is the no-proxy (direct) session.
+const sessionsByProxy = new Map();
+const SESSIONS_MAX = 8;
 
 export class OpencodeTlsUnavailableError extends Error {
   constructor(message) {
@@ -46,29 +55,70 @@ export class OpencodeTlsUnavailableError extends Error {
   }
 }
 
-async function loadSession() {
-  if (!sessionPromise) {
-    sessionPromise = (async () => {
-      const wreq = await loadRuntimeDep("wreq-js");
-      if (typeof wreq.createSession !== "function") {
-        throw new Error("wreq-js runtime is missing createSession");
-      }
-      return wreq.createSession({
-        emulation: { tlsOptions: { cipherList: OPENCODE_CIPHER_LIST } },
-      });
-    })().catch((error) => {
-      sessionPromise = null;
-      throw error;
-    });
-  }
-  return sessionPromise;
+function sessionKey(proxyUrl) {
+  return typeof proxyUrl === "string" ? proxyUrl.trim() : "";
 }
 
-/** Drop the cached session so the next call builds a fresh one. */
+// Display label for a proxy: scheme://host:port only, never credentials.
+function normalizeProxyKey(proxyUrl) {
+  const raw = sessionKey(proxyUrl);
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    return `${parsed.protocol}//${parsed.hostname}${parsed.port ? `:${parsed.port}` : ""}`;
+  } catch {
+    return "unparseable-proxy-url";
+  }
+}
+
+// wreq-js error text can echo the proxy URL; keep the name/code, drop user:pass.
+function redactedError(error) {
+  if (!(error instanceof Error)) return error;
+  const safe = new Error(redactUserinfo(error.message));
+  safe.name = error.name;
+  if (error.code !== undefined) safe.code = error.code;
+  return safe;
+}
+
+async function buildSession(proxyUrl) {
+  const wreq = await loadRuntimeDep("wreq-js");
+  if (typeof wreq.createSession !== "function") {
+    throw new Error("wreq-js runtime is missing createSession");
+  }
+  const session = await wreq.createSession({
+    emulation: { tlsOptions: { cipherList: OPENCODE_CIPHER_LIST } },
+    // wreq-js natively tunnels http/https/socks5 proxies at the transport
+    // layer, so the impersonated TLS handshake still happens through the
+    // proxy — not next to it.
+    ...(proxyUrl ? { proxy: proxyUrl } : {}),
+  });
+  return Object.assign(session, { __proxyKey: normalizeProxyKey(proxyUrl) });
+}
+
+async function loadSession(proxyUrl = "") {
+  const key = sessionKey(proxyUrl);
+  if (!sessionsByProxy.has(key)) {
+    if (sessionsByProxy.size >= SESSIONS_MAX) {
+      // Evict oldest: a rotated-out pool identity should not hold connections.
+      const oldestKey = sessionsByProxy.keys().next().value;
+      const oldest = sessionsByProxy.get(oldestKey);
+      sessionsByProxy.delete(oldestKey);
+      oldest?.then?.((session) => session.close?.()).catch(() => {});
+    }
+    const promise = buildSession(proxyUrl).catch((error) => {
+      sessionsByProxy.delete(key);
+      throw error;
+    });
+    sessionsByProxy.set(key, promise);
+  }
+  return sessionsByProxy.get(key);
+}
+
+/** Drop the cached session(s) so the next call builds a fresh one. */
 export function resetOpencodeTlsSession() {
-  const pending = sessionPromise;
-  sessionPromise = null;
-  pending?.then((session) => session.close?.()).catch(() => {});
+  const pending = [...sessionsByProxy.values()];
+  sessionsByProxy.clear();
+  for (const promise of pending) promise?.then?.((session) => session.close?.()).catch(() => {});
 }
 
 /**
@@ -77,14 +127,18 @@ export function resetOpencodeTlsSession() {
  *
  * Streaming is preserved: the response body is handed over as the live
  * ReadableStream, never buffered.
+ *
+ * `proxyUrl` routes the whole connection (TCP + impersonated TLS) through the
+ * selected proxy. wreq-js owns the transport, so no undici dispatcher is
+ * involved. Omit it for the direct path.
  */
-export async function opencodeTlsFetch(url, init = {}, { signal, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+export async function opencodeTlsFetch(url, init = {}, { signal, timeoutMs = DEFAULT_TIMEOUT_MS, proxyUrl = "" } = {}) {
   let session;
   try {
-    session = await loadSession();
+    session = await loadSession(proxyUrl);
   } catch (error) {
     throw new OpencodeTlsUnavailableError(
-      `wreq-js unavailable (${error instanceof Error ? error.message : "unknown"}) — install the optional wreq-js dependency to reach the OpenCode free tier`
+      `wreq-js unavailable (${error instanceof Error ? redactUserinfo(error.message) : "unknown"}) — install the optional wreq-js dependency to reach the OpenCode free tier`
     );
   }
 
@@ -97,12 +151,22 @@ export async function opencodeTlsFetch(url, init = {}, { signal, timeoutMs = DEF
   if (init.body !== undefined) options.body = init.body;
   if (signal) options.signal = signal;
 
-  const res = await session.fetch(url, options);
+  let res;
+  try {
+    res = await session.fetch(url, options);
+  } catch (error) {
+    throw proxyUrl ? redactedError(error) : error;
+  }
   const headers = {};
   res.headers?.forEach?.((value, key) => {
     headers[key] = value;
   });
+  // Transport-level proof, not selection-level: this is only set after the
+  // session that actually holds the proxy tunnel returned a response. The
+  // value never carries credentials (normalizeProxyKey strips them).
+  // Internal only: upstreamResponseHeaders() does not forward it to clients.
+  if (proxyUrl) headers["x-regent-proxy-via"] = session.__proxyKey || "wreq-js-proxy";
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
 
-export const __test__ = { OPENCODE_CIPHER_LIST };
+export const __test__ = { OPENCODE_CIPHER_LIST, normalizeProxyKey, sessionsByProxy };

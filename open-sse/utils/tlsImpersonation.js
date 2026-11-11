@@ -34,7 +34,7 @@ async function loadWreq() {
 }
 
 // Error text can echo the proxy URL; never log its user:pass.
-function redactUserinfo(message) {
+export function redactUserinfo(message) {
   return String(message || "").replace(/\/\/[^/@\s]+@/g, "//***@");
 }
 

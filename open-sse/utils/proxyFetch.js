@@ -10,7 +10,7 @@ import {
 } from "../config/runtimeConfig.js";
 import { dbg } from "./debugLog.js";
 import { maskString } from "./maskSecrets.cjs";
-import { wreqFetch } from "./tlsImpersonation.js";
+import { wreqFetch, redactUserinfo } from "./tlsImpersonation.js";
 import { getScopedProxyOptions, PROXY_UNAVAILABLE } from "./proxyScope.js";
 import { ensureClaudeCliVersion, applyClaudeCliVersion } from "./claudeCliVersion.js";
 
@@ -171,6 +171,25 @@ const HTTP_SUCCESS_MAX = 300;
 function normalizeString(value) {
   if (value === undefined || value === null) return "";
   return String(value).trim();
+}
+
+/** scheme://host:port only — never credentials. */
+function safeProxyHost(proxyUrl) {
+  try {
+    const parsed = new URL(String(proxyUrl));
+    return `${parsed.protocol}//${parsed.hostname}${parsed.port ? `:${parsed.port}` : ""}`;
+  } catch {
+    return "unparseable-proxy-url";
+  }
+}
+
+/** Destination host only, never the full URL (which may carry a query/path). */
+function safeTargetHost(url) {
+  try {
+    return new URL(typeof url === "string" ? url : url.toString()).host;
+  } catch {
+    return "unparseable-url";
+  }
 }
 
 /**
@@ -553,6 +572,29 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
   // Opt-in browser TLS/HTTP2 fingerprint (wreq-js); null → native fetch.
   const impersonation = proxyOptions?.tlsImpersonation || null;
   const forceFreshSocket = proxyOptions?.forceFreshSocket === true || options?.forceFreshSocket === true;
+
+  // Protocol adapters that own their transport (wreq-js TLS impersonation)
+  // cannot use an undici dispatcher: they must drive the proxy themselves.
+  // Only adapters that declare `proxyCapable` opt in — any other adapter
+  // ignores the proxy URL and would leave over the direct interface, so they
+  // keep the undici path below.
+  // There is no direct fallback here: a failed adapter call is never replayed
+  // outside the proxy.
+  if (proxyUrl && options?.directFetch?.proxyCapable === true) {
+    try {
+      const res = await options.directFetch(url, { ...options, proxyUrl }, proxyUrl);
+      // Reported only after the adapter that holds the tunnel returned.
+      const via = res?.headers?.get?.("x-regent-proxy-via");
+      dbg("PROXY", `PROXY ROUTING VERIFIED | ${safeTargetHost(targetUrl)} | transport=adapter | proxy=${via || safeProxyHost(proxyUrl)} | status=${res?.status}`);
+      return res;
+    } catch (err) {
+      if (options?.signal?.aborted || err?.name === "AbortError") throw err;
+      if (proxyOptions?.strictProxy === true) {
+        throw proxyUnavailable(`Proxy required but failed (strictProxy=true): ${redactUserinfo(err?.message)}`, proxyOptions, err);
+      }
+      throw err;
+    }
+  }
 
   // MITM DNS bypass: for known MITM-intercepted hosts, resolve real IP to avoid DNS spoof
   if (shouldBypassMitmDns(targetUrl)) {
