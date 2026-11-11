@@ -142,6 +142,7 @@ import p138 from "./nous.js";
 import p139 from "./volink.js";
 import p141 from "./runcrate.js";
 import p142 from "./nace.js";
+import p143 from "./sensenova-intl.js";
 export default [
   p0,
   p1,
@@ -284,4 +285,5 @@ export default [
   p139,
   p141,
   p142,
+  p143,
 ];
