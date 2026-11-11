@@ -12,6 +12,14 @@ import { dbg } from "./debugLog.js";
 import { maskString } from "./maskSecrets.cjs";
 import { wreqFetch } from "./tlsImpersonation.js";
 import { getScopedProxyOptions, PROXY_UNAVAILABLE } from "./proxyScope.js";
+import { ensureClaudeCliVersion, applyClaudeCliVersion } from "./claudeCliVersion.js";
+
+const CLAUDE_UA_PROBE = /claude-cli\/\d/;
+function hasClaudeCliHeader(headers) {
+  if (!headers) return false;
+  const values = headers instanceof Headers ? [...headers.values()] : Array.isArray(headers) ? headers.map((h) => h[1]) : Object.values(headers);
+  return values.some((v) => typeof v === "string" && CLAUDE_UA_PROBE.test(v));
+}
 
 const proxyDispatchers = new Map();
 const directDispatchers = new Map();
@@ -512,6 +520,18 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
   if (options?.dispatcher) return rawFetch(url, options);
   // No explicit options: use the connection scope, if any (proxyScope.js).
   if (!proxyOptions) proxyOptions = getScopedProxyOptions();
+  // Keep the spoofed Claude Code version current (new models require a minimum CLI version).
+  // Refresh in the background: the request uses the version already known, so an
+  // unreachable npm registry can never add latency to the chat path. The lookup (a
+  // fixed npm URL) leaves through this request's proxy, like every other upstream call,
+  // minus the per-request transport tweaks and the connection's proxy-failure observer.
+  if (hasClaudeCliHeader(options?.headers)) {
+    const lookupProxyOptions = proxyOptions
+      ? { ...proxyOptions, tlsImpersonation: null, forceFreshSocket: false, onProxyUnavailable: undefined }
+      : null;
+    void ensureClaudeCliVersion((lookupUrl, lookupOptions) => proxyAwareFetch(lookupUrl, lookupOptions, lookupProxyOptions));
+    options = { ...options, headers: applyClaudeCliVersion(options.headers) };
+  }
   const targetUrl = typeof url === "string" ? url : url.toString();
 
   // Vercel relay: forward request via relay headers

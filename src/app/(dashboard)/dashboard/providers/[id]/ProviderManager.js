@@ -172,7 +172,7 @@ export default function ProviderManager({ providerId, embedded = false, liveVers
   const supportsApiKeyAuth = !!APIKEY_PROVIDERS[providerId] || authModes.includes("apikey");
   const isFreeNoAuth = !!FREE_PROVIDERS[providerId]?.noAuth;
   const staticModels = getModelsByProviderId(providerId);
-  const models = (providerId === "cursor" || providerId === "zed") && liveModels.length > 0
+  const models = (providerId === "cursor" || providerId === "zed" || providerId === "claude") && liveModels.length > 0
     ? liveModels
     : staticModels;
   const providerAlias = getProviderAlias(providerId);
@@ -501,12 +501,13 @@ export default function ProviderManager({ providerId, embedded = false, liveVers
     fetchDisabledModels();
   }, [fetchConnections, fetchAliases, fetchCustomModels, fetchDisabledModels]);
 
-  // Live per-connection catalogs (cursor, zed): the static registry carries
-  // no usable list, so resolve from the active connection. Fires only when
-  // the provider id or connection list changes — no polling, no loop.
-  // Cursor path is statement-identical to before; zed adds error surfacing.
+  // Live per-connection catalogs (cursor, zed, claude): resolve from the
+  // active connection (claude: the OAuth model list, so new models show up
+  // before the static registry has them). Fires only when the provider id or
+  // connection list changes — no polling, no loop.
+  // Cursor/claude path is statement-identical to before; zed adds error surfacing.
   useEffect(() => {
-    const isLiveCatalog = providerId === "cursor" || providerId === "zed";
+    const isLiveCatalog = providerId === "cursor" || providerId === "zed" || providerId === "claude";
     if (!isLiveCatalog) {
       // eslint-disable-next-line react/set-state-in-effect -- clears a catalog fetched for a previous provider id
       setLiveModels([]);
