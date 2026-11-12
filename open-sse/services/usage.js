@@ -97,6 +97,7 @@ export async function getUsageForProvider(connection, proxyOptions = null, optio
   // Handlers that call the global fetch (iflow, minimax-code) also go through the proxy.
   return await runWithProxyOptions(proxyOptions, () => handler({
     provider,
+    authType: connection.authType,
     accessToken,
     apiKey,
     providerSpecificData,

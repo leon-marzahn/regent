@@ -5,6 +5,7 @@ import { getProviderConnections } from "@/lib/localDb";
 import { backfillCodexEmails } from "@/lib/oauth/providers";
 import { USAGE_APIKEY_PROVIDERS, USAGE_SUPPORTED_PROVIDERS } from "@/shared/constants/providers";
 import { maskUrlCredentials } from "@/lib/secretRedaction";
+import { isLeaseConnection } from "open-sse/services/minimaxCodeLease.js";
 
 const SAFE_FIELDS = [
   "id", "provider", "authType", "name", "email", "displayName",
@@ -46,7 +47,7 @@ export function sanitizeConnection(c) {
 
 export function isUsageEligible(connection) {
   return USAGE_SUPPORTED_PROVIDERS.includes(connection.provider) && (
-    connection.authType === "oauth" || USAGE_APIKEY_PROVIDERS.includes(connection.provider)
+    connection.authType === "oauth" || isLeaseConnection(connection) || USAGE_APIKEY_PROVIDERS.includes(connection.provider)
   );
 }
 

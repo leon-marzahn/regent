@@ -15,6 +15,8 @@ vi.mock("@/lib/localDb", () => ({
       providerSpecificData: { accountId: "acct", idToken: "secret-id-token", workspaceId: "ws" },
     },
     { id: "c2", provider: "openrouter", authType: "apikey", apiKey: "sk-or-secret" },
+    { id: "c3", provider: "minimax-code", authType: "mcode-lease", name: "MiniMax Desktop (Lease)" },
+    { id: "c4", provider: "minimax-code", authType: "cookie" },
   ]),
 }));
 
@@ -23,7 +25,7 @@ const { listQuotaConnections } = await import("@/lib/quotaConnections");
 describe("listQuotaConnections (server-rendered into the Quota page)", () => {
   it("returns only quota-capable connections, without any credentials", async () => {
     const list = await listQuotaConnections();
-    expect(list.map((c) => c.id)).toEqual(["c1"]);
+    expect(list.map((c) => c.id)).toEqual(["c1", "c3"]);
     const json = JSON.stringify(list);
     for (const secret of ["secret-access", "secret-refresh", "sk-secret", "secret-id-token", "sk-or-secret"])
       expect(json).not.toContain(secret);
