@@ -71,7 +71,7 @@ export function PiModelCaps({ values, extra, setExtra, disabled }: ExtrasProps) 
               <div className="flex shrink-0 gap-2">
                 <Select
                   aria-label={`Context window for ${id}`}
-                  className="w-28"
+                  className="w-36"
                   value={caps.contextWindow}
                   disabled={disabled}
                   onChange={(e) => set(id, "contextWindow", Number(e.target.value))}
@@ -84,7 +84,7 @@ export function PiModelCaps({ values, extra, setExtra, disabled }: ExtrasProps) 
                 </Select>
                 <Select
                   aria-label={`Max output tokens for ${id}`}
-                  className="w-28"
+                  className="w-36"
                   value={caps.maxTokens}
                   disabled={disabled}
                   onChange={(e) => set(id, "maxTokens", Number(e.target.value))}
