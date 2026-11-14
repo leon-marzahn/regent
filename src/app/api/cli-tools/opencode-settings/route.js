@@ -36,7 +36,7 @@ const ALIAS_TO_PROVIDER_ID = {
   ...ALIAS_TO_ID,
 };
 
-// opencode "variants" built from the levels 9Router itself offers for a model
+// opencode "variants" built from the levels the proxy itself offers for a model
 // ("alias/model" → same set as the dashboard picker). Returns null when the
 // model has no reasoning levels, so nothing is written for it.
 const buildEffortVariants = (fullModelId) => {
