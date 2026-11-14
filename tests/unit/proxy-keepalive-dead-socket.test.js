@@ -62,7 +62,9 @@ describe("undici keep-alive dead-socket protection & fresh-socket retry", () => 
     expect(isStaleSocketError(Object.assign(new Error("fetch failed"), { cause: { code: "UND_ERR_SOCKET" } }))).toBe(true);
     expect(isStaleSocketError(Object.assign(new Error("fetch failed"), { cause: { code: "ECONNRESET" } }))).toBe(true);
     expect(isStaleSocketError(Object.assign(new Error("fetch failed"), { cause: { code: "EPIPE" } }))).toBe(true);
-    expect(isStaleSocketError(Object.assign(new Error("fetch failed"), { cause: { code: "UND_ERR_HEADERS_TIMEOUT" } }))).toBe(true);
+    // A headers timeout means the upstream already has the whole request (and may be
+    // generating it): replaying would run and bill the completion twice.
+    expect(isStaleSocketError(Object.assign(new Error("fetch failed"), { cause: { code: "UND_ERR_HEADERS_TIMEOUT", message: "Headers Timeout Error" } }))).toBe(false);
     expect(isStaleSocketError(Object.assign(new Error("fetch failed"), { cause: new Error("other side closed") }))).toBe(true);
     expect(isStaleSocketError(new Error("socket hang up"))).toBe(true);
 

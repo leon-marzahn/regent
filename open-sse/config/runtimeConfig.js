@@ -99,8 +99,9 @@ export const STALE_SOCKET_ERROR_CODES = new Set([
   "UND_ERR_SOCKET",
   "ECONNRESET",
   "EPIPE",
-  "UND_ERR_HEADERS_TIMEOUT",
 ]);
+// Not UND_ERR_HEADERS_TIMEOUT: by then the upstream has the full request and may be
+// generating (and billing) it, so a replay would run the completion twice.
 
 export const NON_STALE_SOCKET_ERROR_CODES = new Set([
   "ENOTFOUND",
@@ -110,6 +111,7 @@ export const NON_STALE_SOCKET_ERROR_CODES = new Set([
   "ENETUNREACH",
   "UND_ERR_CONNECT_TIMEOUT",
   "UND_ERR_INVALID_ARG",
+  "UND_ERR_HEADERS_TIMEOUT",
 ]);
 
 // Deliberately excludes a bare "fetch failed": with no error code the upstream may already
