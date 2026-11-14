@@ -1,4 +1,18 @@
 
+# v102.4.0 (2026-11-14)
+
+## Upgrade notes
+- TLS: upstream certificates are now always verified (security fix). Before, when a provider's certificate failed to verify, the proxy quietly retried without verification. That applied to normal requests and to MITM passthrough of IDE traffic, so anyone presenting a bad certificate could receive your provider API keys and tokens. Those requests now fail. For a self-hosted endpoint with a self-signed certificate, or a network with a TLS-inspecting proxy or antivirus, add the CA with `NODE_EXTRA_CA_CERTS=/path/to/ca.pem`. Set it in the server's own environment (shell, service unit or Docker), not user-wide, because MITM mode manages that variable itself. As a last resort, `REGENT_ALLOW_INSECURE_TLS=1` restores the old behaviour. That gives up TLS protection for your credentials, and in MITM passthrough it turns verification off for every connection. `STRICT_SSL=1` overrides it.
+- MiniMax Code "Use desktop app" works on macOS and Linux only; it is refused on Windows, where the desktop app's named pipe can't be ownership-checked.
+- OpenCode free tier: without the optional `wreq-js` package, direct requests go out on Node's own TLS and may be refused; requests through a connection proxy fail rather than leave the proxy.
+- Requests to api.anthropic.com, console.anthropic.com and claude.ai offer only the X25519 key-exchange curve. `REGENT_TLS_ECDH_CURVE` sets the curve list for every upstream instead.
+
+## Fixes
+- **security**: Verify upstream TLS certificates unless explicitly opted out (#167)
+
+## 9router sync
+- **sync**: 9router 0.5.119 (#166)
+
 # v102.3.2 (2026-11-04)
 
 ## Fixes
