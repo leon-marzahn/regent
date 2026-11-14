@@ -101,6 +101,7 @@ export default defineConfig({
       "!/src/mitm",
       "/src/mitm/*",
       "!/src/mitm/portOwner.js",
+      "!/src/mitm/tlsVerify.js",
       "!/src/lib",
       "/src/lib/*",
       "!/src/lib/liveEvents.js",

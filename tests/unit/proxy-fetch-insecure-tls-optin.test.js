@@ -75,12 +75,12 @@ describe("MITM passthrough verifies upstream certificates", () => {
     expect(src.match(/rejectUnauthorized:\s*VERIFY_UPSTREAM_TLS/g)).toHaveLength(3);
   });
 
-  it("only skips verification on the explicit opt-in, and STRICT_SSL vetoes it", () => {
-    const line = src.match(/const VERIFY_UPSTREAM_TLS = (.+);/)[1];
-    const truthyEnv = (v) => v === "1" || v === "true";
-    const verify = (env) => new Function("process", "truthyEnv", `return ${line};`)({ env }, truthyEnv);
-    expect(verify({})).toBe(true);
-    expect(verify({ REGENT_ALLOW_INSECURE_TLS: "1" })).toBe(false);
-    expect(verify({ REGENT_ALLOW_INSECURE_TLS: "1", STRICT_SSL: "true" })).toBe(true);
+  it("only skips verification on the explicit opt-in, and STRICT_SSL vetoes it", async () => {
+    const { verifyUpstreamTls } = await import("../../src/mitm/tlsVerify.js");
+    expect(verifyUpstreamTls({})).toBe(true);
+    expect(verifyUpstreamTls({ REGENT_ALLOW_INSECURE_TLS: "yes" })).toBe(true);
+    expect(verifyUpstreamTls({ REGENT_ALLOW_INSECURE_TLS: "1" })).toBe(false);
+    expect(verifyUpstreamTls({ REGENT_ALLOW_INSECURE_TLS: "true", STRICT_SSL: "1" })).toBe(true);
+    expect(src).toMatch(/const VERIFY_UPSTREAM_TLS = verifyUpstreamTls\(\);/);
   });
 });

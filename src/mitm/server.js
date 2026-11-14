@@ -13,12 +13,10 @@ const { generateCert, getCertForDomain } = require("./cert/generate");
 const { getMitmAlias } = require("./dbReader");
 const { applyAntigravityIdeVersionOverride } = require("./antigravityIdeVersion");
 const { killPortListeners } = require("./portOwner");
+const { verifyUpstreamTls } = require("./tlsVerify");
 
-// Forwarded IDE traffic carries the user's provider tokens, so upstream certificates
-// are verified (servername is always set). Same opt-in as open-sse proxyFetch:
-// REGENT_ALLOW_INSECURE_TLS=1 skips verification, STRICT_SSL vetoes it.
-const truthyEnv = (v) => v === "1" || v === "true";
-const VERIFY_UPSTREAM_TLS = !(truthyEnv(process.env.REGENT_ALLOW_INSECURE_TLS) && !truthyEnv(process.env.STRICT_SSL));
+// Upstream certificates are verified unless explicitly opted out (see tlsVerify.js).
+const VERIFY_UPSTREAM_TLS = verifyUpstreamTls();
 const LOCAL_PORT = 443;
 const IS_WIN = process.platform === "win32";
 const ENABLE_FILE_LOG = IS_DEV;
