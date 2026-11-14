@@ -10,6 +10,9 @@ const fsMock = vi.hoisted(() => ({
   writeFile: vi.fn(async (_p, content) => { fsMock.store = content; }),
   mkdir: vi.fn(async () => {}),
   access: vi.fn(async () => {}),
+  // configWriter: no file on disk → no backup taken, then write + chmod.
+  stat: vi.fn(async () => { throw Object.assign(new Error("ENOENT"), { code: "ENOENT" }); }),
+  chmod: vi.fn(async () => {}),
 }));
 
 vi.mock("fs/promises", () => ({ default: fsMock, ...fsMock }));
@@ -20,7 +23,8 @@ vi.mock("../../src/app/api/cli-tools/resolveApiKey.js", () => ({
 const { POST } = await import("../../src/app/api/cli-tools/opencode-settings/route.js");
 
 const post = (body) => POST({ json: async () => body });
-const written = () => JSON.parse(fsMock.store).provider["9router"].models;
+// Written under the `regent` key; the second case seeds the legacy `9router` key to cover migration.
+const written = () => JSON.parse(fsMock.store).provider.regent.models;
 
 describe("opencode-settings POST effort variants", () => {
   it("writes variants from the levels 9Router offers for the model", async () => {
