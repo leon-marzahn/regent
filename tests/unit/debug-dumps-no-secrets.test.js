@@ -85,10 +85,12 @@ describe("insecure TLS retry warning", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const err = Object.assign(new Error("self signed"), { code: "DEPTH_ZERO_SELF_SIGNED_CERT" });
     const fetchStub = vi.fn().mockRejectedValueOnce(err).mockResolvedValue(new Response("ok"));
-    vi.stubGlobal("fetch", fetchStub);
+    // proxyFetch sends through the undici package's fetch.
+    vi.doMock("undici", async (importOriginal) => ({ ...(await importOriginal()), fetch: fetchStub }));
     const { proxyAwareFetch } = await import("../../open-sse/utils/proxyFetch.js");
     await proxyAwareFetch(`https://x.test/v1?key=${KEY}`, { method: "GET" }).catch(() => {});
-    vi.unstubAllGlobals();
+    vi.doUnmock("undici");
+    expect(fetchStub).toHaveBeenCalledTimes(2);
     const printed = warn.mock.calls.flat().join(" ");
     expect(printed).toContain("insecure TLS");
     expect(printed).not.toContain(KEY);

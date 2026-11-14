@@ -3,8 +3,9 @@
 import http from "node:http";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
-const nativeFetch = vi.fn(async () => new Response("native", { status: 200 }));
-globalThis.fetch = nativeFetch;
+// The native path is the undici package's fetch (proxyFetch's transport).
+const nativeFetch = vi.hoisted(() => vi.fn(async () => new Response("native", { status: 200 })));
+vi.mock("undici", async (importOriginal) => ({ ...(await importOriginal()), fetch: nativeFetch }));
 
 const { wreqFetch, __setWreqLoaderForTests } =
   await import("../../open-sse/utils/tlsImpersonation.js");

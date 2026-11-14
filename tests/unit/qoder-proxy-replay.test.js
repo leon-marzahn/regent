@@ -1,4 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { ProxyAgent } from "undici";
+
+// proxyAwareFetch sends through the undici package's fetch: route it to the test's mock.
+const transport = vi.hoisted(() => ({ fetch: null }));
+vi.mock("undici", async (importOriginal) => ({
+  ...(await importOriginal()),
+  fetch: (...args) => transport.fetch(...args),
+}));
 
 vi.mock("../../open-sse/services/qoderModels.js", () => ({
   getQoderModelConfig: vi.fn(async () => ({ key: "auto", max_output_tokens: 32 })),
@@ -29,8 +37,8 @@ async function loadExecutor(fetchMock, useProxy = true) {
     vi.stubEnv(key, "");
   }
   if (useProxy) vi.stubEnv("HTTPS_PROXY", "http://proxy.test:3128");
-  // Exercise the real proxyAwareFetch: it captures fetch when imported.
-  vi.stubGlobal("fetch", fetchMock);
+  // Exercise the real proxyAwareFetch over a mocked transport.
+  transport.fetch = fetchMock;
   const { QoderExecutor } = await import("../../open-sse/executors/qoder.js");
   return new QoderExecutor();
 }
@@ -81,7 +89,8 @@ describe("Qoder signed inference transport", () => {
     expect(result.response.ok).toBe(true);
     await result.response.text();
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(!!fetchMock.mock.calls[0][1].dispatcher).toBe(useProxy);
+    // The direct path has its own Agent too; only a proxied call rides a ProxyAgent.
+    expect(fetchMock.mock.calls[0][1].dispatcher instanceof ProxyAgent).toBe(useProxy);
   });
 
   it("preserves caller cancellation without replaying the request", async () => {
