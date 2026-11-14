@@ -11,7 +11,9 @@ function okJson(body) {
   return { ok: true, status: 200, json: () => Promise.resolve(body), text: () => Promise.resolve(JSON.stringify(body)) };
 }
 
-describe("Kiro region host validation", () => {
+// Each case cold-imports the token-refresh graph after vi.resetModules(), which can
+// exceed the 5s default under full-suite load (it passes in isolation).
+describe("Kiro region host validation", { timeout: 20_000 }, () => {
   beforeEach(() => {
     vi.resetModules();
   });
