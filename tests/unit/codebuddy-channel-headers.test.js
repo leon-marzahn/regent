@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vite-plus/test";
 import { PROVIDERS } from "open-sse/config/providers.js";
 import { getExecutor } from "open-sse/executors/index.js";
 

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vite-plus/test";
 import { normalizeClaudePassthrough } from "../../open-sse/translator/formats/claude.js";
 
 describe("normalizeClaudePassthrough — Haiku adaptive thinking (#5183)", () => {

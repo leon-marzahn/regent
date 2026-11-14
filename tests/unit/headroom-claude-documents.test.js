@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { compressWithHeadroom } from "../../open-sse/rtk/headroom.js";
 
 const options = {

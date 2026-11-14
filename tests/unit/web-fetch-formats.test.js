@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { handleFetchCore } from "../../open-sse/handlers/fetch/index.js";
 import jina from "../../open-sse/providers/registry/jina-reader.js";
 import tavily from "../../open-sse/providers/registry/tavily.js";

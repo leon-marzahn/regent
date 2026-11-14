@@ -6,7 +6,7 @@
  * x-cli-surface "cli", x-taste-learning, x-project-slug = slugify(cwd), x-session-id.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vite-plus/test";
 import {
   slugifyPath,
   toCommandCodeSessionUuid,

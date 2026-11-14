@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { getThinkingLevels } from "../../open-sse/providers/thinkingLevels.js";
 
 const fsMock = vi.hoisted(() => ({

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vite-plus/test";
 import { handleSttCore } from "open-sse/handlers/sttCore.js";
 
 describe("STT multipart FormData", () => {

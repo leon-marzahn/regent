@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vite-plus/test";
 import { getModelUpstreamId } from "../../open-sse/config/providerModels.js";
 
 // #4940: DeepSeek's API accepts only "deepseek-flash" and "deepseek-v4-pro".

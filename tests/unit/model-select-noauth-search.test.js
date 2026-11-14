@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { buildModelGroups, collectModelValues } from "@/shared/utils/selectableModels.js";
 
 describe("no-auth search providers in model selection (#3269)", () => {

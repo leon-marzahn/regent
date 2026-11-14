@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vite-plus/test";
 import { CodeBuddyIntlExecutor } from "../../open-sse/executors/codebuddy-intl.js";
 
 describe("CodeBuddyIntlExecutor system prompt & agent sanitization", () => {

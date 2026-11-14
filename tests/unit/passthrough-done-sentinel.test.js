@@ -1,7 +1,7 @@
 // Regression for #5592 — an openai passthrough stream whose upstream ends with an
 // unterminated "data: [DONE]" (no trailing newline) was forwarded raw and then
 // followed by the sentinel flush() appends, producing "data: [DONE]data: [DONE]".
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vite-plus/test";
 
 import { createSSEStream } from "../../open-sse/utils/stream.js";
 

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import REGISTRY from "../../open-sse/providers/registry/index.js";
 import { PROVIDER_MEDIA } from "../../open-sse/providers/index.js";
 import { buildSystemoneUrl, handleSystemoneCore } from "../../open-sse/handlers/systemoneCore.js";

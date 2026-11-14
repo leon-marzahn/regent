@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { getEmbeddingAdapter } from "../../open-sse/handlers/embeddingProviders/index.js";
 import { handleEmbeddingsCore } from "../../open-sse/handlers/embeddingsCore.js";
 import { AI_PROVIDERS, getProvidersByKind } from "../../src/shared/constants/providers.js";

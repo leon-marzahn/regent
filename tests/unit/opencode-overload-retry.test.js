@@ -3,7 +3,7 @@
 // OpenCode CLI retries that transient 429; 9router used to surface it. These
 // tests pin the executor-side retry so the CLI gets a response, while a real
 // free-tier quota 429 is still delivered without delay.
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 
 // Keep the retry loop under test in isolation: no network, no credentials.
 const { baseExecuteMock } = vi.hoisted(() => ({ baseExecuteMock: vi.fn() }));

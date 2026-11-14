@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 vi.mock("@/models", () => ({ getProviderNodeById: vi.fn() }));
 vi.mock("next/server", () => ({

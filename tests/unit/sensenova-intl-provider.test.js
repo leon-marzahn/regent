@@ -4,7 +4,7 @@
 // 401 {"error":{"code":16,"message":"Forbidden"}}, while token.sensenova.ai
 // accepts it. China accounts stay on `sensenova`; international accounts use
 // `sensenova-intl`. Each entry owns a fixed host — no user-supplied base URL.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import REGISTRY from "../../open-sse/providers/registry/index.js";
 import { PROVIDERS, PROVIDER_MODELS, PROVIDER_MEDIA } from "../../open-sse/providers/index.js";

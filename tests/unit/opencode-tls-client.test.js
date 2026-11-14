@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
 
 // The free gate keys on the TLS ClientHello: on one process and egress IP the
 // same body/headers answered 429 over Node's OpenSSL fingerprint and 200 over

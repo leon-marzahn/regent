@@ -1,4 +1,4 @@
-import { test } from "vitest";
+import { test } from "vite-plus/test";
 import assert from "node:assert/strict";
 import { stripUnsupportedParams } from "../../open-sse/translator/concerns/paramSupport.js";
 import nvidiaConfig from "../../open-sse/providers/registry/nvidia.js";

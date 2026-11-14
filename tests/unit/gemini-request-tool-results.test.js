@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { geminiToOpenAIRequest } from "../../open-sse/translator/request/gemini-to-openai.js";
 
 const response = (name, result, id) => ({ functionResponse: { name, response: { result }, ...(id ? { id } : {}) } });

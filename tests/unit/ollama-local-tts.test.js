@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { handleTtsCore } from "../../open-sse/handlers/ttsCore.js";
 import { buildTtsProviderModels, getTtsVoicesForModel } from "../../open-sse/config/ttsModels.js";
 import { AI_PROVIDERS, getProvidersByKind } from "../../src/shared/constants/providers.js";
