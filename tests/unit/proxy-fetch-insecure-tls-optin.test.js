@@ -9,7 +9,6 @@ const certError = () => Object.assign(new TypeError("fetch failed"), { cause: { 
 
 describe("proxyFetch insecure-TLS fallback is opt-in", () => {
   const savedEnv = { ...process.env };
-  const savedFetch = globalThis.fetch;
   let fetchMock;
 
   beforeEach(() => {
@@ -21,12 +20,13 @@ describe("proxyFetch insecure-TLS fallback is opt-in", () => {
     fetchMock = vi.fn()
       .mockRejectedValueOnce(certError())
       .mockResolvedValue(new Response("ok"));
-    globalThis.fetch = fetchMock; // proxyFetch captures fetch at import
+    // proxyFetch sends through the undici package's fetch.
+    vi.doMock("undici", async (importOriginal) => ({ ...(await importOriginal()), fetch: fetchMock }));
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
   afterEach(() => {
-    globalThis.fetch = savedFetch;
+    vi.doUnmock("undici");
     process.env = { ...savedEnv };
     vi.restoreAllMocks();
   });
