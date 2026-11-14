@@ -49,6 +49,8 @@ interface TtsConfig {
   apiEndpoint?: string;
   defaultVoiceId?: string;
   languageOptions?: (string | { id: string; name: string })[];
+  defaultFormat?: string;
+  formatOptions?: { value: string; label: string }[];
 }
 interface Voice {
   id: string;
@@ -70,6 +72,36 @@ const ttsModelsOf = (id: string) =>
   (getModelsByProviderId(id) as Model[]).filter((m) => getModelKind(m) === "tts") as Voice[];
 const voicesFor = (providerId: string, model: string) =>
   (getTtsVoicesForModel(providerId, model) || []) as Voice[];
+
+const DEFAULT_FORMATS = [
+  { value: "mp3", label: "MP3 file" },
+  { value: "json", label: "JSON (base64)" },
+];
+
+/** Wrap raw 16-bit PCM (Ollama's `pcm` output) in a WAV header so `<audio>` can play it. */
+function pcmToWav(pcm: ArrayBuffer, sampleRate = 24000, channels = 1): Blob {
+  const blockAlign = channels * 2;
+  const buffer = new ArrayBuffer(44 + pcm.byteLength);
+  const view = new DataView(buffer);
+  const ascii = (offset: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i));
+  };
+  ascii(0, "RIFF");
+  view.setUint32(4, 36 + pcm.byteLength, true);
+  ascii(8, "WAVE");
+  ascii(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, channels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true); // bits per sample
+  ascii(36, "data");
+  view.setUint32(40, pcm.byteLength, true);
+  new Uint8Array(buffer, 44).set(new Uint8Array(pcm));
+  return new Blob([buffer], { type: "audio/wav" });
+}
 
 const PLACEHOLDER = `// Audio plays here after running.
 // With JSON output the response looks like:
@@ -97,8 +129,11 @@ export function TtsExample({ providerId }: { providerId: string }) {
   const [input, setInput] = useState("Hello, this is a text to speech test.");
   const [style, setStyle] = useState("");
   const [languageHint, setLanguageHint] = useState("");
-  const [format, setFormat] = useState<"mp3" | "json">("mp3");
+  const formatOptions = config.formatOptions || DEFAULT_FORMATS;
+  const [format, setFormat] = useState(config.defaultFormat || formatOptions[0].value);
   const [audioUrl, setAudioUrl] = useState("");
+  // Raw PCM is wrapped in a WAV header to play, but downloads as the bytes the API sent
+  const [downloadUrl, setDownloadUrl] = useState("");
   const [json, setJson] = useState<unknown>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
@@ -126,10 +161,7 @@ export function TtsExample({ providerId }: { providerId: string }) {
 
     // Hardcoded voices are preselected; api-language providers wait for a language pick.
     if (config.voiceSource !== "hardcoded") return;
-    const defaultModel =
-      config.hasModelSelector && config.modelKey
-        ? (getModelsByProviderId(config.modelKey) as Model[])?.[0]?.id || ""
-        : "";
+    const defaultModel = model;
     const list =
       config.voicesPerModel && defaultModel
         ? voicesFor(providerId, defaultModel)
@@ -144,6 +176,7 @@ export function TtsExample({ providerId }: { providerId: string }) {
     } else {
       setVoices(list);
       setVoice(list[0].id);
+      if (config.hasVoiceIdInput) setVoiceId(list[0].id);
     }
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- config derives from providerId
   }, [providerId]);
@@ -155,6 +188,8 @@ export function TtsExample({ providerId }: { providerId: string }) {
     setVoices(list);
     // A model without preset voices (voicedesign/voiceclone) drops the stale voice
     setVoice(list[0]?.id ?? "");
+    // The typed voice id follows too, so a checkpoint without the old voice doesn't keep it
+    if (config.hasVoiceIdInput && list[0]) setVoiceId(list[0].id);
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- config derives from providerId
   }, [model]);
 
@@ -163,6 +198,13 @@ export function TtsExample({ providerId }: { providerId: string }) {
       if (audioUrl) URL.revokeObjectURL(audioUrl);
     },
     [audioUrl],
+  );
+  useEffect(
+    () => () => {
+      if (downloadUrl && downloadUrl !== audioUrl) URL.revokeObjectURL(downloadUrl);
+    },
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- revoke only when the download changes
+    [downloadUrl],
   );
 
   const openPicker = async () => {
@@ -219,6 +261,12 @@ export function TtsExample({ providerId }: { providerId: string }) {
       const v = activeVoice.trim();
       return m ? `${alias}/${m}${v ? `/${v}` : ""}` : "";
     }
+    if (providerId === "ollama-local") {
+      // "default" is the checkpoint's own voice: leave it off the path
+      const m = (model || "phonon:multilingual").trim();
+      const v = activeVoice.trim();
+      return `${alias}/${m}${v && v !== "default" ? `/${v}` : ""}`;
+    }
     if (config.hasModelSelector && model && activeVoice) return `${alias}/${model}/${activeVoice}`;
     if (config.hasModelSelector && model) return `${alias}/${model}`;
     if (activeVoice) return `${alias}/${activeVoice}`;
@@ -228,7 +276,11 @@ export function TtsExample({ providerId }: { providerId: string }) {
   const body: Record<string, unknown> = { model: modelFull, input };
   if (config.hasLanguageHint && languageHint) body.language = languageHint;
   if (config.hasStyleInput && style.trim()) body.style = style.trim();
+  // mp3 is the server default and json goes in the query; other formats ride in the body
+  if (format !== "json" && format !== "mp3") body.response_format = format;
   const query = format === "json" ? "?response_format=json" : "";
+  const ext =
+    format === "pcm" ? "pcm" : format === "wav" || providerId === "ollama-local" ? "wav" : "mp3";
 
   const curl = (key: string) =>
     [
@@ -236,7 +288,7 @@ export function TtsExample({ providerId }: { providerId: string }) {
       `  -H "Content-Type: application/json"`,
       `  -H "Authorization: Bearer ${key}"`,
       `  -d '${JSON.stringify(body)}'`,
-      format === "mp3" && "  --output speech.mp3",
+      format !== "json" && `  --output speech.${ext}`,
     ]
       .filter(Boolean)
       .join(" \\\n");
@@ -246,6 +298,7 @@ export function TtsExample({ providerId }: { providerId: string }) {
     setRunning(true);
     setError("");
     setAudioUrl("");
+    setDownloadUrl("");
     setJson(null);
     setLatency(null);
     const start = now();
@@ -271,6 +324,10 @@ export function TtsExample({ providerId }: { providerId: string }) {
           (r) => r.blob(),
         );
         setAudioUrl(URL.createObjectURL(blob));
+      } else if (format === "pcm") {
+        const pcm = await res.arrayBuffer();
+        setDownloadUrl(URL.createObjectURL(new Blob([pcm], { type: "audio/pcm" })));
+        setAudioUrl(URL.createObjectURL(pcmToWav(pcm)));
       } else {
         setAudioUrl(URL.createObjectURL(await res.blob()));
       }
@@ -397,7 +454,9 @@ export function TtsExample({ providerId }: { providerId: string }) {
             placeholder={
               providerId === "selfhosted-tts"
                 ? "e.g. af_heart or vivian (optional)"
-                : "e.g. CwhRBWXzGAHq8TQ4Fs17"
+                : providerId === "ollama-local"
+                  ? "e.g. Zoey, Easton, Freya, or default"
+                  : "e.g. CwhRBWXzGAHq8TQ4Fs17"
             }
           />
         </Row>
@@ -432,14 +491,7 @@ export function TtsExample({ providerId }: { providerId: string }) {
         </Row>
       )}
       <Row label="Output">
-        <Segmented
-          value={format}
-          onChange={setFormat}
-          options={[
-            { value: "mp3", label: "MP3 file" },
-            { value: "json", label: "JSON (base64)" },
-          ]}
-        />
+        <Segmented value={format} onChange={setFormat} options={formatOptions} />
       </Row>
       <RequestBlock
         env={env}
@@ -460,7 +512,14 @@ export function TtsExample({ providerId }: { providerId: string }) {
         latencyMs={audioUrl ? latency : null}
         text={json ? JSON.stringify(maskB64(json), null, 2) : ""}
         placeholder={audioUrl ? undefined : PLACEHOLDER}
-        action={audioUrl ? <DownloadLink href={audioUrl} filename="speech.mp3" /> : null}
+        action={
+          audioUrl ? (
+            <DownloadLink
+              href={downloadUrl || audioUrl}
+              filename={`speech.${format === "json" ? "mp3" : ext}`}
+            />
+          ) : null
+        }
       >
         {audioUrl && <audio controls src={audioUrl} className="w-full" />}
       </ResponseBlock>
