@@ -23,8 +23,10 @@
 // - On POSIX the data dir, its run/ dir, the capability file and the socket
 //   must belong to this process's user and not be group/world-writable, so
 //   another local user can't plant a fake broker and harvest the capability.
-//   Windows named pipes can't be checked this way (pipe-name squatting is a
-//   residual risk there).
+//   Windows named pipes can't be checked this way: any local process could
+//   create the pipe name first and receive the capability secret. Lease mode
+//   is therefore refused on Windows (UNSUPPORTED_PLATFORM); the pipe endpoint
+//   math stays only so the protocol port matches upstream.
 // - Broker replies are bounded (64 KiB frame, timeout) and type-checked; the
 //   leased token is kept in memory only and never logged.
 
@@ -49,6 +51,7 @@ const ERROR_MESSAGES = Object.freeze({
   AUTH_REQUIRED: "Desktop authentication is required.",
   BROKER_UNAVAILABLE: "Desktop authentication integration is unavailable.",
   BROKER_UNTRUSTED: "Desktop authentication files are not owned by this user.",
+  UNSUPPORTED_PLATFORM: "Desktop lease sign-in is available on macOS and Linux only.",
   CAPABILITY_REJECTED: "Desktop authentication capability was rejected.",
   PROTOCOL_MISMATCH: "Desktop authentication protocol is incompatible.",
   INVALID_REQUEST: "Desktop authentication request is invalid.",
@@ -286,7 +289,14 @@ function sendRequest(endpoint, request, timeoutMs) {
   });
 }
 
+// Windows named pipes have no owner check we can rely on (see header), so the
+// capability secret is never sent over one.
+export function assertLeasePlatformSupported(platform = process.platform) {
+  if (platform === "win32") throw new AuthLeaseError("UNSUPPORTED_PLATFORM");
+}
+
 function prepare(dataDir, checks) {
+  assertLeasePlatformSupported();
   const endpoint = resolveLeaseEndpoint(dataDir);
   assertTrustedEndpoint(dataDir, endpoint, checks);
   return { endpoint, capability: readCapability(dataDir) };

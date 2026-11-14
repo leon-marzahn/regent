@@ -13,7 +13,9 @@ const FALLBACK_ERROR = "Could not reach the MiniMax Code desktop app";
  * desktop app's login over its local auth broker. No second sign-in and no stored
  * refresh token; the desktop app keeps owning refresh, so it and regent can share
  * one subscription without their single-use refresh tokens fighting.
- * Works only when the dashboard is opened on the machine running the desktop app.
+ * Works only when the dashboard is opened on the machine running the desktop app,
+ * and only on macOS/Linux: the server refuses Windows (its named pipe can't be
+ * ownership-checked) and the button shows that message.
  */
 export function MinimaxLeaseButton({
   providerId,

@@ -11,6 +11,7 @@ import {
   AUTH_LEASE_MAX_FRAME_BYTES,
   AuthLeaseError,
   DEFAULT_MCODE_DATA_DIR,
+  assertLeasePlatformSupported,
   assertOwnedByCurrentUser,
   validateLeaseResult,
   FrameDecoder,
@@ -112,6 +113,34 @@ describe("lease endpoint resolution", () => {
   it("refuses relative data dirs", () => {
     expect(() => resolveLeaseEndpoint("relative/path", "win32")).toThrow(AuthLeaseError);
     expect(() => resolveLeaseEndpoint("relative/path", "linux")).toThrow(AuthLeaseError);
+  });
+});
+
+// Windows named pipes can't be ownership-checked, so a squatter could receive the
+// capability secret: lease mode is refused there before anything is read or sent.
+describe("lease platform gate", () => {
+  const realPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+  afterEach(() => Object.defineProperty(process, "platform", realPlatform));
+
+  it("allows macOS and Linux and refuses Windows", () => {
+    expect(() => assertLeasePlatformSupported("darwin")).not.toThrow();
+    expect(() => assertLeasePlatformSupported("linux")).not.toThrow();
+    let err;
+    try { assertLeasePlatformSupported("win32"); } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(AuthLeaseError);
+    expect(err.code).toBe("UNSUPPORTED_PLATFORM");
+    expect(err.message).toMatch(/macOS and Linux/);
+  });
+
+  it("rejects a lease on Windows without reading the capability file or connecting", async () => {
+    const readSpy = vi.spyOn(fs, "readFileSync");
+    const connectSpy = vi.spyOn(net, "connect");
+    Object.defineProperty(process, "platform", { ...realPlatform, value: "win32" });
+    await expect(requestLease("C:\\Users\\u\\.minimax")).rejects.toMatchObject({ code: "UNSUPPORTED_PLATFORM" });
+    expect(readSpy).not.toHaveBeenCalled();
+    expect(connectSpy).not.toHaveBeenCalled();
+    readSpy.mockRestore();
+    connectSpy.mockRestore();
   });
 });
 
