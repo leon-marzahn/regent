@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import fs from "node:fs";
 import path from "node:path";
+import { createTlsFailureHint } from "../../open-sse/utils/tlsFailureHint.js";
+import { verifyUpstreamTls } from "../../src/mitm/tlsVerify.js";
 
 // A request whose upstream certificate fails verification must not be replayed with
 // verification off by default: that hands the request (and its provider credentials)
@@ -54,8 +56,7 @@ describe("proxyFetch insecure-TLS fallback is opt-in", () => {
     expect(hints()).toBe(2);
   });
 
-  it("bounds the hint's host memory and tolerates unparsable URLs", async () => {
-    const { createTlsFailureHint } = await import("../../open-sse/utils/tlsFailureHint.js");
+  it("bounds the hint's host memory and tolerates unparsable URLs", () => {
     const warn = vi.fn();
     const hint = createTlsFailureHint({ warn, mask: (s) => s.replace(/key=[^&]+/, "key=[REDACTED]") });
     const err = certError();
@@ -99,8 +100,7 @@ describe("MITM passthrough verifies upstream certificates", () => {
     expect(src.match(/rejectUnauthorized:\s*VERIFY_UPSTREAM_TLS/g)).toHaveLength(3);
   });
 
-  it("only skips verification on the explicit opt-in, and STRICT_SSL vetoes it", async () => {
-    const { verifyUpstreamTls } = await import("../../src/mitm/tlsVerify.js");
+  it("only skips verification on the explicit opt-in, and STRICT_SSL vetoes it", () => {
     expect(verifyUpstreamTls({})).toBe(true);
     expect(verifyUpstreamTls({ REGENT_ALLOW_INSECURE_TLS: "yes" })).toBe(true);
     expect(verifyUpstreamTls({ REGENT_ALLOW_INSECURE_TLS: "1" })).toBe(false);
