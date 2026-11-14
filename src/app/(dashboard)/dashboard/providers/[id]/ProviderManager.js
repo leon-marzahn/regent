@@ -1813,13 +1813,12 @@ export default function ProviderManager({ providerId, embedded = false, liveVers
           providerDisplayAlias={providerDisplayAlias}
           providerId={providerId}
           model={editingCustomModel}
-          onSave={async (modelId, caps, transport, name) => {
+          mediaKind={isMedia ? modelKind : undefined}
+          onSave={async (modelId, type, caps, transport, name) => {
             if (editingCustomModel) {
               await handleUpdateCustomModel(modelId, editingCustomModel.kind || editingCustomModel.type || "llm", caps, transport, name);
             } else {
-              // caps.stt is a UI-only flag; the API accepts transports only on
-              // type "stt" records, so the save derives the type from it.
-              await handleAddCustomModel(modelId, isMedia ? modelKind : caps?.stt ? "stt" : "llm", providerStorageAlias, caps, transport, name);
+              await handleAddCustomModel(modelId, type, providerStorageAlias, caps, transport, name);
             }
             closeCustomModelDialog();
           }}
