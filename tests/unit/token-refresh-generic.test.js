@@ -8,6 +8,14 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 
+// proxyFetch sends through the undici package's fetch, not the global one: route
+// it to the test's mock while one is installed (reset with global.fetch below).
+const transport = vi.hoisted(() => ({ fetch: null }));
+vi.mock("undici", async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, fetch: (...args) => (transport.fetch ?? actual.fetch)(...args) };
+});
+
 const originalFetch = global.fetch;
 
 function mockFetchOnce(payload, { ok = true, status = 200 } = {}) {
@@ -18,11 +26,12 @@ function mockFetchOnce(payload, { ok = true, status = 200 } = {}) {
     text: () => Promise.resolve(JSON.stringify(payload)),
   });
   global.fetch = fn;
+  transport.fetch = fn;
   return fn;
 }
 
 describe("refreshAccessToken — config-driven profiles", () => {
-  beforeEach(() => { vi.clearAllMocks(); vi.resetModules(); global.fetch = originalFetch; });
+  beforeEach(() => { vi.clearAllMocks(); vi.resetModules(); global.fetch = originalFetch; transport.fetch = null; });
   afterEach(() => { global.fetch = originalFetch; });
 
   it("iflow: Basic Auth header from clientId:clientSecret, form body keeps client_secret", async () => {
@@ -103,7 +112,7 @@ describe("refreshAccessToken — config-driven profiles", () => {
   });
 });
 describe("Cline refresh", () => {
-  beforeEach(() => { vi.clearAllMocks(); vi.resetModules(); global.fetch = originalFetch; });
+  beforeEach(() => { vi.clearAllMocks(); vi.resetModules(); global.fetch = originalFetch; transport.fetch = null; });
   afterEach(() => { global.fetch = originalFetch; });
 
   it("uses the extension JSON refresh contract", async () => {

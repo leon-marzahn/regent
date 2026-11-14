@@ -5,19 +5,26 @@
 //
 // Harness: a fake HTTP proxy records every CONNECT target and refuses the
 // tunnel (502), so nothing (and no token) ever reaches a real provider. The
-// native fetch is replaced before proxyFetch loads: requests with a dispatcher
-// (proxied) pass through to the fake proxy, requests without one (direct) are
-// recorded and rejected. Proxied == CONNECT logged; leaked == direct logged.
+// transport proxyFetch sends through (the undici package's fetch) is wrapped:
+// requests on a ProxyAgent (proxied) pass through to the fake proxy, any other
+// request (direct: no dispatcher, or the direct Agent) is recorded and
+// rejected. Proxied == CONNECT logged; leaked == direct logged.
 import http from "node:http";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const realFetch = globalThis.fetch;
-const direct = [];
-globalThis.fetch = (url, options = {}) => {
-  if (options.dispatcher) return realFetch(url, options);
-  direct.push((url instanceof URL ? url : new URL(url)).host);
-  return Promise.reject(new Error("direct connection blocked by test"));
-};
+const direct = vi.hoisted(() => []);
+vi.mock("undici", async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    fetch: (url, options = {}) => {
+      if (options.dispatcher instanceof actual.ProxyAgent) return actual.fetch(url, options);
+      direct.push((url instanceof URL ? url : new URL(url)).host);
+      return Promise.reject(new Error("direct connection blocked by test"));
+    },
+  };
+});
 
 const pools = new Map();
 vi.mock("@/models", () => ({

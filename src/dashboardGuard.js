@@ -35,6 +35,10 @@ const ALWAYS_PROTECTED = [
   "/api/oauth/kiro/auto-import",
   "/api/oauth/zed/auto-import",
   "/api/oauth/xiaomi-mimo/auto-import",
+  // MiniMax Code desktop lease: talks to a broker socket in this host's home dir and
+  // mints connections that borrow the desktop app's sign-in.
+  "/api/oauth/minimax-code/lease",
+  "/api/oauth/minimax-code-global/lease",
 ];
 
 // Routes that spawn child processes or read host secrets — restrict to localhost.
@@ -54,6 +58,8 @@ const LOCAL_ONLY_PATHS = [
   "/api/oauth/kiro/auto-import",
   "/api/oauth/zed/auto-import",
   "/api/oauth/xiaomi-mimo/auto-import",
+  "/api/oauth/minimax-code/lease",
+  "/api/oauth/minimax-code-global/lease",
   "/api/auth/reset-password",
   "/api/headroom/start",
   "/api/headroom/stop",

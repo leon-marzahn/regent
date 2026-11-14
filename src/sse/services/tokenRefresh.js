@@ -170,7 +170,8 @@ export async function updateProviderCredentials(connectionId, newCredentials) {
   try {
     const updates = {};
 
-    if (newCredentials.accessToken)         updates.accessToken  = newCredentials.accessToken;
+    // A token borrowed from the MiniMax Code desktop broker lives in memory only.
+    if (newCredentials.accessToken && !newCredentials.leasedToken) updates.accessToken = newCredentials.accessToken;
     if (newCredentials.refreshToken)        updates.refreshToken = newCredentials.refreshToken;
     if (newCredentials.apiKey)              updates.apiKey       = newCredentials.apiKey;
     if (newCredentials.idToken)             updates.idToken = newCredentials.idToken;

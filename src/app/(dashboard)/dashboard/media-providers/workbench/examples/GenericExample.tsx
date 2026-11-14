@@ -3,13 +3,14 @@
 import { useEffect, useState } from "react";
 import { Icon, Input, Segmented, Select, Switch } from "@/ui";
 import {
+  AI_PROVIDERS,
   MEDIA_PROVIDER_KINDS,
   getProviderAlias,
   resolveProviderId,
 } from "@/shared/constants/providers";
 import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
 import type { Connection } from "../../../providers/model";
-import { KIND_EXAMPLE_CONFIG } from "./config";
+import { KIND_EXAMPLE_CONFIG, type ExtraField } from "./config";
 import {
   DownloadLink,
   EndpointRow,
@@ -89,9 +90,30 @@ export function GenericExample({
   const [question, setQuestion] = useState(DEFAULT_QUESTION);
   const [refImage, setRefImage] = useState("");
   const [maskImage, setMaskImage] = useState("");
-  const [extra, setExtra] = useState<Record<string, string | number | boolean>>(() =>
-    Object.fromEntries((ex?.extraFields || []).map((f) => [f.key, f.default ?? ""])),
+  // Web fetch offers only the formats the provider's fetchConfig declares (Tavily has no HTML).
+  const formats =
+    kind === "webFetch"
+      ? (AI_PROVIDERS as Record<string, { fetchConfig?: { formats?: string[] } }>)[providerId]
+          ?.fetchConfig?.formats
+      : undefined;
+  const providerFormats = Array.isArray(formats) && formats.length > 0 ? formats : null;
+  const extraFields: ExtraField[] = (ex?.extraFields || []).map((f) =>
+    f.key === "format" && providerFormats
+      ? {
+          ...f,
+          options: providerFormats,
+          default: providerFormats.includes(String(f.default)) ? f.default : providerFormats[0],
+        }
+      : f,
   );
+  const [picked, setExtra] = useState<Record<string, string | number | boolean>>(() =>
+    Object.fromEntries(extraFields.map((f) => [f.key, f.default ?? ""])),
+  );
+  // A format the provider no longer offers falls back to its default.
+  const extra =
+    providerFormats && !providerFormats.includes(String(picked.format))
+      ? { ...picked, format: extraFields.find((f) => f.key === "format")?.default ?? "" }
+      : picked;
   const [output, setOutput] = useState<"json" | "binary">("json");
   const [pinned, setPinned] = useState("");
   const [result, setResult] = useState<{ data: unknown; latencyMs: number } | null>(null);
@@ -126,7 +148,7 @@ export function GenericExample({
   const ref = refImage.trim() || defaults.image || "";
   const mask = maskImage.trim() || defaults.mask_image || "";
 
-  const fields = (ex.extraFields || []).filter(
+  const fields = extraFields.filter(
     (f) =>
       models.length === 0 || (Array.isArray(modelObj?.params) && modelObj.params.includes(f.key)),
   );

@@ -18,15 +18,20 @@ vi.mock("node:dns/promises", async (importOriginal) => {
   return { ...real, default: { ...real, lookup }, lookup };
 });
 
+// proxyFetch sends through the undici package's fetch: stub that one.
+const sent = vi.hoisted(() => []);
+vi.mock("undici", async (importOriginal) => ({
+  ...(await importOriginal()),
+  fetch: async (url, options = {}) => {
+    sent.push({ url: String(url), dispatcher: options.dispatcher });
+    return new Response(PNG, { headers: { "content-type": "image/png" } });
+  },
+}));
+
 const PNG = Buffer.from("89504e470d0a1a0a0000000d4948445200000001000000010806000000", "hex");
 const realFetch = globalThis.fetch;
-const sent = [];
-globalThis.fetch = async (url, options = {}) => {
-  sent.push({ url: String(url), dispatcher: options.dispatcher });
-  return new Response(PNG, { headers: { "content-type": "image/png" } });
-};
 const { isBlockedIpAddress } = await import("../../src/shared/utils/ssrfGuard.js");
-await import("../../open-sse/utils/proxyFetch.js"); // patches global fetch over the stub
+await import("../../open-sse/utils/proxyFetch.js"); // patches global fetch
 const { fetchImageAsBase64 } = await import("../../open-sse/translator/concerns/image.js");
 const { ProxyAgent } = await import("undici");
 

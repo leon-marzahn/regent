@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 
+// proxyFetch sends through the undici package's fetch, not the global one: route
+// it to the test's mock while one is installed.
+const transport = vi.hoisted(() => ({ fetch: null }));
+vi.mock("undici", async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, fetch: (...args) => (transport.fetch ?? actual.fetch)(...args) };
+});
+
 const originalFetch = global.fetch;
 const TEST_CLIENT_ID = "00000000-0000-4000-8000-000000000000";
 const TEST_SCOPE = `api://${TEST_CLIENT_ID}/codewhisperer:conversations offline_access`;
@@ -15,6 +23,7 @@ describe("Kiro external_idp (CLIProxyAPI) import and refresh", () => {
     vi.clearAllMocks();
     vi.resetModules();
     global.fetch = originalFetch;
+    transport.fetch = null;
   });
 
   afterEach(() => {
@@ -34,6 +43,7 @@ describe("Kiro external_idp (CLIProxyAPI) import and refresh", () => {
       }),
     });
     global.fetch = fetchMock;
+    transport.fetch = fetchMock;
 
     const { refreshKiroToken } = await import("../../open-sse/services/tokenRefresh.js");
     const result = await refreshKiroToken("old-refresh-token", {
@@ -80,6 +90,7 @@ describe("Kiro external_idp (CLIProxyAPI) import and refresh", () => {
     const { refreshKiroToken } = await import("../../open-sse/services/tokenRefresh.js");
     const fetchMock = vi.fn();
     global.fetch = fetchMock;
+    transport.fetch = fetchMock;
 
     const result = await refreshKiroToken("old-refresh-token", {
       authMethod: "external_idp",

@@ -22,6 +22,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { createHash } from "crypto";
 import { refreshKiroToken } from "./tokenRefresh.js";
+import { AWS_REGION_PATTERN } from "../config/awsConstants.js";
 
 const KIRO_RUNTIME_SDK_VERSION = "1.0.0";
 const KIRO_AGENT_OS = "windows";
@@ -55,7 +56,8 @@ function stripSyntheticSuffixes(id) {
 function regionFromProfileArn(profileArn) {
   if (!profileArn || typeof profileArn !== "string") return DEFAULT_REGION;
   const parts = profileArn.split(":");
-  if (parts.length >= 4 && parts[3]) return parts[3];
+  // The segment becomes the q.<region> host that receives the bearer token.
+  if (parts.length >= 4 && AWS_REGION_PATTERN.test(parts[3])) return parts[3];
   return DEFAULT_REGION;
 }
 

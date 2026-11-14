@@ -4,11 +4,14 @@
   "packageManager": "bun@1.3.14",
   "forkedFrom": {
     "repo": "decolua/9router",
-    "version": "0.5.109",
-    "commit": "f39d8f07"
+    "version": "0.5.119",
+    "commit": "1855aa44"
   },
   "private": true,
   "description": "9Router web dashboard",
+  "engines": {
+    "node": ">=20.18.1"
+  },
   "scripts": {
     "release": "node scripts/release.mjs",
     "backport": "node scripts/backport.mjs",
@@ -64,7 +67,7 @@
     "socks-proxy-agent": "^8.0.5",
     "sql.js": "^1.14.1",
     "tailwind-merge": "^3.7.0",
-    "undici": "^7.30.1",
+    "undici": "^7.30.2",
     "uuid": "^13.0.0",
     "zustand": "^5.0.10"
   },

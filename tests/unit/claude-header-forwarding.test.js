@@ -29,7 +29,7 @@ describe("DefaultExecutor.buildHeaders() — claude provider", () => {
       headers["Anthropic-Version"] === "2023-06-01" ||
       headers["anthropic-version"] === "2023-06-01";
     expect(hasVersion).toBe(true);
-    expect(headers["User-Agent"]).toBe("claude-cli/2.1.280 (external, sdk-cli)");
+    expect(headers["User-Agent"]).toBe("claude-cli/2.1.322 (external, sdk-cli)");
   });
 
   it("includes heavy-agent beta flags for claude-opus-5", () => {
@@ -279,16 +279,19 @@ describe("proxyAwareFetch — api.anthropic.com routing", () => {
       return { gotScraping: fn };
     });
 
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      headers: new Headers(),
-      body: null,
-      text: async () => "{}",
-      json: async () => ({}),
-    });
+    // proxyFetch sends through the undici package's own fetch (not globalThis.fetch).
+    vi.doMock("undici", async (importOriginal) => ({
+      ...(await importOriginal()),
+      fetch: vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: new Headers(),
+        body: null,
+        text: async () => "{}",
+        json: async () => ({}),
+      }),
+    }));
 
     vi.resetModules();
     const { proxyAwareFetch } = await import("open-sse/utils/proxyFetch.js");
@@ -300,7 +303,7 @@ describe("proxyAwareFetch — api.anthropic.com routing", () => {
     });
 
     expect(res.ok).toBe(true);
-    globalThis.fetch = originalFetch;
+    vi.doUnmock("undici");
   });
 
   it("does NOT route non-Anthropic hosts through gotScraping", async () => {

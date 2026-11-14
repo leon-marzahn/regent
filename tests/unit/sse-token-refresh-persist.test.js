@@ -67,6 +67,13 @@ describe("updateProviderCredentials", () => {
     expect(updates.providerSpecificData).toEqual({ a: 1, b: 2, copilotToken: "cp", copilotTokenExpiresAt: 99 });
   });
 
+  it("never persists a token borrowed from the MiniMax Code desktop broker", async () => {
+    await tr.updateProviderCredentials("c1", { accessToken: "leased", leasedToken: true, testStatus: "active" });
+    const updates = mocks.updateProviderConnection.mock.calls[0][1];
+    expect(updates).not.toHaveProperty("accessToken");
+    expect(JSON.stringify(updates)).not.toContain("leased");
+  });
+
   it("returns false instead of throwing when the DB write fails", async () => {
     mocks.updateProviderConnection.mockRejectedValue(new Error("disk full"));
     expect(await tr.updateProviderCredentials("c1", { accessToken: "a" })).toBe(false);

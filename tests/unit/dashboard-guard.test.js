@@ -454,6 +454,49 @@ describe("dashboard guard auto-import routes (host credential readers)", () => {
   }
 });
 
+// MiniMax Code desktop lease actions reach a broker socket in the host's home dir.
+describe("dashboard guard MiniMax Code lease routes", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.NINEROUTER_PEER_TOKEN = PEER_TOKEN;
+    mocks.getConsistentMachineId.mockResolvedValue("cli-token");
+  });
+
+  const withJwt = (req) => {
+    req.cookies.get = vi.fn(() => ({ value: "jwt" }));
+    return req;
+  };
+
+  for (const path of [
+    "/api/oauth/minimax-code/lease-connect",
+    "/api/oauth/minimax-code/lease-status",
+    "/api/oauth/minimax-code-global/lease-connect",
+    "/api/oauth/minimax-code-global/lease-status",
+  ]) {
+    it(`${path}: local-only and login required even with requireLogin off`, async () => {
+      // Remote with a valid session: local-only.
+      mocks.verifyDashboardAuthToken.mockResolvedValue(true);
+      mocks.getSettings.mockResolvedValue({ requireLogin: true });
+      expect((await proxy(withJwt(request(path, { host: "regent.example.com" })))).status).toBe(403);
+
+      // Loopback without a session, requireLogin off: still needs the session.
+      mocks.verifyDashboardAuthToken.mockResolvedValue(false);
+      mocks.getSettings.mockResolvedValue({ requireLogin: false });
+      expect((await proxy(localRequest(path, { host: "localhost:20128" }))).status).toBe(401);
+
+      // Loopback, cross-site Origin (CSRF), with a session: refused.
+      mocks.verifyDashboardAuthToken.mockResolvedValue(true);
+      mocks.getSettings.mockResolvedValue({ requireLogin: true });
+      expect(
+        (await proxy(withJwt(localRequest(path, { host: "localhost:20128", origin: "https://evil.example" })))).status,
+      ).toBe(403);
+
+      // Loopback with a session: allowed.
+      expect(await proxy(withJwt(localRequest(path, { host: "localhost:20128" })))).toBe(mocks.nextResponse);
+    });
+  }
+});
+
 // The guard once kept an unused PROTECTED_API_PATHS list; deny-by-default for /api/*
 // is what actually protects these. Pin that so removing the list hid nothing.
 describe("dashboard guard formerly-listed protected API paths", () => {

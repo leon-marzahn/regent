@@ -14,7 +14,7 @@ import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { translate } from "@/i18n/runtime";
 import { fetchSuggestedModels } from "@/shared/utils/providerModelsFetcher";
-import { getProviderCustomModelRows } from "@/shared/utils/providerCustomModels";
+import { applyQoderModelNames, getProviderCustomModelRows } from "@/shared/utils/providerCustomModels";
 import { Button as UiButton, Checkbox, EmptyState, Eyebrow, Icon, Input as UiInput, Select as UiSelect, Switch, cn } from "@/ui";
 import ModelRow from "./ModelRow";
 import PassthroughModelsSection from "./PassthroughModelsSection";
@@ -27,9 +27,15 @@ import BulkImportCodexModal from "./BulkImportCodexModal";
 import BulkImportGrokCliModal from "./BulkImportGrokCliModal";
 import CustomConfigCard from "./CustomConfigCard";
 import AutoPingScheduleModal from "./AutoPingScheduleModal";
+import { MinimaxLeaseButton, MCODE_LEASE_PROVIDERS } from "./MinimaxLeaseButton";
 import { getScheduleSlotLabels } from "@/shared/services/quotaPingSchedule";
 
 const ONE_BY_ONE_DELAY_MS = 1000;
+
+// Providers whose registry list is only an offline fallback: the dashboard
+// renders the live per-connection catalog from GET /api/providers/[id]/models
+// when one resolves, and falls back to the static rows otherwise.
+const LIVE_MODEL_CATALOG_PROVIDERS = new Set(["cursor", "zed", "claude", "commandcode"]);
 
 const AUTO_PING_SETTINGS_KEYS = {
   claude: "claudeAutoPing",
@@ -171,9 +177,9 @@ export default function ProviderManager({ providerId, embedded = false, liveVers
   const supportsApiKeyAuth = !!APIKEY_PROVIDERS[providerId] || authModes.includes("apikey");
   const isFreeNoAuth = !!FREE_PROVIDERS[providerId]?.noAuth;
   const staticModels = getModelsByProviderId(providerId);
-  const models = (providerId === "cursor" || providerId === "zed") && liveModels.length > 0
+  const models = LIVE_MODEL_CATALOG_PROVIDERS.has(providerId) && liveModels.length > 0
     ? liveModels
-    : staticModels;
+    : applyQoderModelNames(staticModels, customModels, getProviderAlias(providerId));
   const providerAlias = getProviderAlias(providerId);
   
   const isOpenAICompatible = isOpenAICompatibleProvider(providerId);
@@ -500,12 +506,13 @@ export default function ProviderManager({ providerId, embedded = false, liveVers
     fetchDisabledModels();
   }, [fetchConnections, fetchAliases, fetchCustomModels, fetchDisabledModels]);
 
-  // Live per-connection catalogs (cursor, zed): the static registry carries
-  // no usable list, so resolve from the active connection. Fires only when
-  // the provider id or connection list changes — no polling, no loop.
-  // Cursor path is statement-identical to before; zed adds error surfacing.
+  // Live per-connection catalogs (cursor, zed, claude): resolve from the
+  // active connection (claude: the OAuth model list, so new models show up
+  // before the static registry has them). Fires only when the provider id or
+  // connection list changes — no polling, no loop.
+  // Cursor/claude path is statement-identical to before; zed adds error surfacing.
   useEffect(() => {
-    const isLiveCatalog = providerId === "cursor" || providerId === "zed";
+    const isLiveCatalog = LIVE_MODEL_CATALOG_PROVIDERS.has(providerId);
     if (!isLiveCatalog) {
       // eslint-disable-next-line react/set-state-in-effect -- clears a catalog fetched for a previous provider id
       setLiveModels([]);
@@ -662,11 +669,33 @@ export default function ProviderManager({ providerId, embedded = false, liveVers
         return;
       }
 
+      if (providerId === "qoder" || providerId === "qoder-cn") {
+        // Save every catalog entry with its upstream display name; existing
+        // records get the latest name. Ids and routing stay the same.
+        for (const model of models) {
+          const id = model.id?.replace(/^(qoder-cn|qoder)\//, "");
+          if (!id) continue;
+          const saved = await fetch("/api/models/custom", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ providerAlias: providerStorageAlias, id, type: "llm", name: model.name || id }),
+          });
+          if (!saved.ok) {
+            const error = await saved.json().catch(() => ({}));
+            throw new Error(error.error || "Failed to save model");
+          }
+        }
+        await fetchCustomModels();
+        window.dispatchEvent(new CustomEvent("customModelChanged"));
+        alert(translate("Successfully updated") + ` ${models.length} ` + translate("models"));
+        return;
+      }
+
       let importedCount = 0;
       for (const model of models) {
         const modelId = model.id || model.name;
         if (!modelId) continue;
-        
+
         // Qoder model ID format may be "qoder/auto", "qoder-cn/auto" or "auto",
         // need to remove the provider prefix before storing.
         const cleanModelId = modelId.replace(/^(qoder-cn|qoder)\//, "");
@@ -1615,6 +1644,9 @@ export default function ProviderManager({ providerId, embedded = false, liveVers
               {providerId === "iflow" && !isCompatible && (
                 <UiButton icon="cookie" onClick={() => setShowIFlowCookieModal(true)} title="Add connection using browser cookie">Cookie</UiButton>
               )}
+              {MCODE_LEASE_PROVIDERS.has(providerId) && !isCompatible && (
+                <MinimaxLeaseButton providerId={providerId} onConnected={fetchConnections} />
+              )}
               {providerId === "codex" && (
                 <UiButton icon="playlist_add" onClick={() => setShowBulkImportCodex(true)} title={translate("Bulk import codex accounts from JSON")}>{translate("Bulk Add")}</UiButton>
               )}
@@ -1808,13 +1840,12 @@ export default function ProviderManager({ providerId, embedded = false, liveVers
           providerDisplayAlias={providerDisplayAlias}
           providerId={providerId}
           model={editingCustomModel}
-          onSave={async (modelId, caps, transport, name) => {
+          mediaKind={isMedia ? modelKind : undefined}
+          onSave={async (modelId, type, caps, transport, name) => {
             if (editingCustomModel) {
               await handleUpdateCustomModel(modelId, editingCustomModel.kind || editingCustomModel.type || "llm", caps, transport, name);
             } else {
-              // caps.stt is a UI-only flag; the API accepts transports only on
-              // type "stt" records, so the save derives the type from it.
-              await handleAddCustomModel(modelId, isMedia ? modelKind : caps?.stt ? "stt" : "llm", providerStorageAlias, caps, transport, name);
+              await handleAddCustomModel(modelId, type, providerStorageAlias, caps, transport, name);
             }
             closeCustomModelDialog();
           }}

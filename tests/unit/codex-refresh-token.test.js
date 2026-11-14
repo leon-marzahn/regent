@@ -9,6 +9,14 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 
+// proxyFetch sends through the undici package's fetch, not the global one: route
+// it to the test's mock while one is installed.
+const transport = vi.hoisted(() => ({ fetch: null }));
+vi.mock("undici", async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, fetch: (...args) => (transport.fetch ?? actual.fetch)(...args) };
+});
+
 const originalFetch = global.fetch;
 
 describe("Codex Refresh Token", () => {
@@ -16,6 +24,7 @@ describe("Codex Refresh Token", () => {
     vi.clearAllMocks();
     vi.resetModules();
     global.fetch = originalFetch;
+    transport.fetch = null;
   });
 
   afterEach(() => {
@@ -28,6 +37,7 @@ describe("Codex Refresh Token", () => {
       json: () => Promise.resolve(payload),
     });
     global.fetch = fetchMock;
+    transport.fetch = fetchMock;
     return fetchMock;
   }
 

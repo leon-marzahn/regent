@@ -29,6 +29,8 @@ const SPECIALIZED = new Set([
 const ENV_DEPENDENT = new Set([
   "x-client-version", "x-core-version", "x-platform", "x-platform-version",
   "x-msh-version", "x-msh-device-name", "x-msh-device-model", "x-mavis-session-id", "x-mavis-timezone-offset",
+  // CodeBuddy's per-request plugin ids (random UUIDs)
+  "x-request-id", "x-conversation-id", "x-conversation-request-id", "x-conversation-message-id",
 ]);
 function sanitize(headers) {
   const out = {};

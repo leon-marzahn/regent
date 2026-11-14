@@ -175,20 +175,29 @@ export function useProxyPools() {
     }
   };
 
-  const bulkDelete = (ids: string[], onDone: () => void) => {
+  /**
+   * Ask, then delete `ids`. `revalidate` re-picks the targets on confirm: a test still in
+   * flight can change a pool's status (and hide it from a filtered view) while the dialog is open.
+   */
+  const bulkDelete = (
+    ids: string[],
+    onDone: () => void,
+    revalidate: (ids: string[]) => string[] = (x) => x,
+  ) => {
     if (ids.length === 0) return;
     setConfirm({
       title: "Delete proxy pools",
       message: `Delete ${ids.length} proxy pool(s)?`,
       confirmText: "Delete",
       onConfirm: async () => {
+        const targets = revalidate(ids);
         setConfirm(null);
         setBulkBusy(true);
         try {
           let ok = 0;
           let blocked = 0;
           let failed = 0;
-          for (const id of ids) {
+          for (const id of targets) {
             try {
               const res = await fetch(`/api/proxy-pools/${id}`, { method: "DELETE" });
               if (res.ok) ok += 1;

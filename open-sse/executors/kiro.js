@@ -15,6 +15,12 @@ import { AWS_EVENTSTREAM } from "../config/awsConstants.js";
 import { crc32, parseEventFrame } from "../utils/awsEventStream.js";
 
 const KIRO_REPAIR_BUFFER_MAX_BYTES = 8 * 1024 * 1024;
+// Regions per service host; a region outside the set is never spliced into the hostname.
+const KIRO_SERVICE_REGIONS = {
+  q: new Set(["us-east-1", "eu-central-1"]),
+  runtime: new Set(["us-east-1", "eu-central-1"]),
+  codewhisperer: new Set(["us-east-1"]),
+};
 const KIRO_REPAIR_HEARTBEAT_MS = 10_000;
 const KIRO_SHORT_FINAL_MAX_CHARS = 800;
 const EVENTSTREAM_MAX_MESSAGE_BYTES = AWS_EVENTSTREAM.maxMessageBytes;
@@ -309,11 +315,17 @@ export class KiroExecutor extends BaseExecutor {
     // reject foreign tokens with 401/403, which DO fall through, so trying
     // q/codewhisperer first is safe for every auth method (CLIRO parity).
 
-    const region = (credentials?.providerSpecificData?.region || "us-east-1").trim();
-    const regionalize = (u) =>
-      region && region !== "us-east-1" && u.includes("amazonaws.com")
-        ? u.replace(/([a-z]+)\.[a-z0-9-]+\.amazonaws\.com/, `$1.${region}.amazonaws.com`)
-        : u;
+    // Only an allow-listed region reaches the hostname that receives the bearer
+    // token: the stored region is credential data, so anything else (unserved
+    // regions, injected host fragments) keeps the hardcoded us-east-1 host.
+    const requestedRegion = String(credentials?.providerSpecificData?.region || "us-east-1").trim();
+    const regionalize = (u) => {
+      if (!u.includes("amazonaws.com")) return u;
+      const service = u.match(/\/\/([a-z]+)\.[a-z0-9-]+\.amazonaws\.com/)?.[1];
+      const covered = Object.hasOwn(KIRO_SERVICE_REGIONS, service) ? KIRO_SERVICE_REGIONS[service] : null;
+      if (!covered || !covered.has(requestedRegion)) return u;
+      return u.replace(/([a-z]+)\.[a-z0-9-]+\.amazonaws\.com/, `$1.${requestedRegion}.amazonaws.com`);
+    };
 
     const amazon = baseUrls.filter((u) => u.includes("amazonaws.com")).map(regionalize);
     const others = baseUrls.filter((u) => !u.includes("amazonaws.com"));

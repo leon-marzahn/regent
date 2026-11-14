@@ -63,6 +63,16 @@ function createSpinner(text) {
 }
 
 const pkg = require("./package.json");
+const {
+  getPidFilePath,
+  writePidRecord,
+  removePidRecordIfOwner,
+  killCloudflaredForPort,
+  killAppProcesses,
+  killPortListener,
+  stopPreviousInstance: stopRecordedLauncher,
+  trayStatusCallbacks,
+} = require("./src/cli/utils/launcherProcess");
 const { ensureSqliteRuntime, buildEnvWithRuntime } = require("./hooks/sqliteRuntime");
 const { ensureTrayRuntime } = require("./hooks/trayRuntime");
 const args = process.argv.slice(2);
@@ -124,6 +134,10 @@ function getDisplayHost() {
   return host === DEFAULT_HOST ? "localhost" : host;
 }
 const MAX_PORT_ATTEMPTS = 10;
+// Upper bounds for waiting on killed processes / a released port. Both waits
+// return as soon as the condition holds, so the common case costs nothing.
+const PROCESS_EXIT_WAIT_MS = 1000;
+const PORT_RELEASE_WAIT_MS = 3000;
 // Identifiers for killAllAppProcesses - only kill our own processes.
 // "9router" is the pre-rename name (old installs, and this repo's folder name).
 const PROCESS_IDENTIFIERS = [
@@ -233,132 +247,16 @@ function killTunnelByPidFile() {
   killByPidFile(path.join(tunnelDir, "tailscale.pid"));
 }
 
-// Kill cloudflared whose --url targets this app's port (covers stale PID file case)
+// Kill cloudflared whose --url targets this app's port (covers stale PID file case).
+// Runs the process scan asynchronously so it never blocks launcher startup.
 function killCloudflaredByAppPort(appPort) {
-  if (!appPort) return [];
-  const portMatchers = [`localhost:${appPort}`, `127.0.0.1:${appPort}`];
-  const pids = [];
-  try {
-    if (process.platform === "win32") {
-      const psCmd = `powershell -NonInteractive -WindowStyle Hidden -Command "Get-WmiObject Win32_Process -Filter 'Name=\\"cloudflared.exe\\"' | Select-Object ProcessId,CommandLine | ConvertTo-Csv -NoTypeInformation"`;
-      const output = execSync(psCmd, { encoding: "utf8", windowsHide: true, timeout: 5000 });
-      const lines = output.split("\n").slice(1).filter(l => l.trim());
-      lines.forEach(line => {
-        if (portMatchers.some(m => line.includes(m))) {
-          const match = line.match(/^"(\d+)"/);
-          if (match && match[1]) pids.push(match[1]);
-        }
-      });
-    } else {
-      const output = execSync("ps -eo pid,command 2>/dev/null", { encoding: "utf8", timeout: 5000 });
-      output.split("\n").forEach(line => {
-        if (line.includes("cloudflared") && portMatchers.some(m => line.includes(m))) {
-          const parts = line.trim().split(/\s+/);
-          const pid = parts[0];
-          if (pid && !isNaN(pid)) pids.push(pid);
-        }
-      });
-    }
-  } catch { }
-  return pids;
+  killCloudflaredForPort(appPort);
 }
 
-// Kill all app processes
-function killAllAppProcesses(appPort) {
-  return new Promise((resolve) => {
-    try {
-      // Background: MITM + tunnel/cloudflared run on separate ports/processes —
-      // killing them doesn't free the app port, so don't block the critical path.
-      // Server-side MITM manager has stale-lock recovery and starts deferred (~3s).
-      setImmediate(() => {
-        try { killProxyByPidFile(); } catch {}
-        try { killTunnelByPidFile(); } catch {}
-        try { killCloudflaredByAppPort(appPort); } catch {}
-      });
-
-      const platform = process.platform;
-      let pids = [];
-
-      if (platform === "win32") {
-        // Windows: use WMI to get full CommandLine (tasklist /V doesn't include it)
-        try {
-          const psCmd = `powershell -NonInteractive -WindowStyle Hidden -Command "Get-WmiObject Win32_Process -Filter 'Name=\\"node.exe\\"' | Select-Object ProcessId,CommandLine | ConvertTo-Csv -NoTypeInformation"`;
-          const output = execSync(psCmd, {
-            encoding: "utf8",
-            windowsHide: true,
-            timeout: 5000
-          });
-          const lines = output.split("\n").slice(1).filter(l => l.trim());
-          lines.forEach(line => {
-            // Whitelist: real node process running regent (or legacy 9router) cli.js, or next-server.
-            // Avoids killing editors/grep/strace/cursor that just have the name in cmdline.
-            const cmd = line.toLowerCase();
-            const isAppProcess =
-              (cmd.includes("node") && PROCESS_IDENTIFIERS.some((id) => cmd.includes(id) && (cmd.includes("cli.js") || cmd.includes(`\\${id}`) || cmd.includes(`/${id}`))))
-              || cmd.includes("next-server");
-            if (isAppProcess) {
-              const match = line.match(/^"(\d+)"/);
-              if (match && match[1] && match[1] !== process.pid.toString()) {
-                pids.push(match[1]);
-              }
-            }
-          });
-        } catch (e) {
-          // No processes found or error - continue
-        }
-      } else {
-        // macOS/Linux: use ps to find all matching processes
-        try {
-          const output = execSync('ps aux 2>/dev/null', {
-            encoding: 'utf8',
-            timeout: 5000
-          });
-          const lines = output.split('\n');
-
-          lines.forEach(line => {
-            // Whitelist: real node process running regent (or legacy 9router) cli.js, or next-server.
-            // Avoids killing grep/strace/editors/cursor that incidentally match the name.
-            const cmd = line.toLowerCase();
-            const isAppProcess =
-              (cmd.includes("node") && PROCESS_IDENTIFIERS.some((id) => cmd.includes(id) && (cmd.includes("cli.js") || cmd.includes(`/${id}`))))
-              || cmd.includes("next-server");
-            if (isAppProcess) {
-              const parts = line.trim().split(/\s+/);
-              const pid = parts[1];
-              if (pid && !isNaN(pid) && pid !== process.pid.toString()) {
-                pids.push(pid);
-              }
-            }
-          });
-        } catch (e) {
-          // No processes found or error - continue
-        }
-      }
-
-      // Kill all found processes
-      if (pids.length > 0) {
-        pids.forEach(pid => {
-          try {
-            if (platform === "win32") {
-              execSync(`taskkill /F /PID ${pid} 2>nul`, { stdio: 'ignore', shell: true, windowsHide: true, timeout: 3000 });
-            } else {
-              execSync(`kill -9 ${pid} 2>/dev/null`, { stdio: 'ignore', timeout: 3000 });
-            }
-          } catch (err) {
-            // Process already dead or can't kill - continue
-          }
-        });
-
-        // Wait for processes to fully terminate
-        setTimeout(() => resolve(), 1000);
-      } else {
-        resolve();
-      }
-    } catch (err) {
-      // Silent fail - continue anyway
-      resolve();
-    }
-  });
+// Kill all app processes (full machine-wide scan — slow on Windows, so the
+// launcher only uses it as a fallback; see stopPreviousInstance).
+function killAllAppProcesses() {
+  return killAppProcesses(PROCESS_IDENTIFIERS, { exitWaitMs: PROCESS_EXIT_WAIT_MS });
 }
 
 // Sleep helper using SharedArrayBuffer wait (sync, no busy-loop)
@@ -410,50 +308,7 @@ function killProxyByPidFile() {
 
 // Kill any process on specific port
 function killProcessOnPort(port) {
-  return new Promise((resolve) => {
-    try {
-      const platform = process.platform;
-      let pid;
-
-      if (platform === "win32") {
-        try {
-          const output = execSync(`netstat -ano | findstr :${port}`, {
-            encoding: 'utf8',
-            shell: true,
-            windowsHide: true,
-            timeout: 5000
-          }).trim();
-          const lines = output.split('\n').filter(l => l.includes('LISTENING'));
-          if (lines.length > 0) {
-            pid = lines[0].trim().split(/\s+/).pop();
-            execSync(`taskkill /F /PID ${pid} 2>nul`, { stdio: 'ignore', shell: true, windowsHide: true, timeout: 3000 });
-          }
-        } catch (e) {
-          // Port is free or error
-        }
-      } else {
-        // macOS/Linux
-        try {
-          const pidOutput = execSync(`lsof -ti:${port}`, {
-            encoding: 'utf8',
-            stdio: ['pipe', 'pipe', 'ignore']
-          }).trim();
-          if (pidOutput) {
-            pid = pidOutput.split('\n')[0];
-            execSync(`kill -9 ${pid} 2>/dev/null`, { stdio: 'ignore', timeout: 3000 });
-          }
-        } catch (e) {
-          // Port is free or error
-        }
-      }
-
-      // Wait for port to be released
-      setTimeout(() => resolve(), 500);
-    } catch (err) {
-      // Silent fail - continue anyway
-      resolve();
-    }
-  });
+  return killPortListener(port, { releaseWaitMs: PORT_RELEASE_WAIT_MS });
 }
 
 
@@ -513,11 +368,37 @@ if (!fs.existsSync(serverPath)) {
   process.exit(1);
 }
 
-// Start server immediately; run update check in parallel (not on the critical path).
+const launcherPidFile = getPidFilePath(getAppDataDir());
+
+// Stop the previous launcher by its PID record (fast path). The machine-wide
+// process scan (~0.5s per PowerShell call on Windows) runs only when the port is
+// still occupied afterwards, e.g. by a launcher from a version without a record.
+function stopPreviousInstance(appPort) {
+  // MITM + tunnel run on separate ports/processes — killing them doesn't free the
+  // app port, so keep them off the critical path.
+  // Server-side MITM manager has stale-lock recovery and starts deferred (~3s).
+  setImmediate(() => {
+    try { killProxyByPidFile(); } catch {}
+    try { killTunnelByPidFile(); } catch {}
+    try { killCloudflaredByAppPort(appPort); } catch {}
+  });
+
+  return stopRecordedLauncher({
+    pidFile: launcherPidFile,
+    port: appPort,
+    exitWaitMs: PROCESS_EXIT_WAIT_MS,
+    killAll: killAllAppProcesses,
+    killOnPort: killProcessOnPort,
+  });
+}
+
+// Show progress immediately; run update check in parallel (not on the critical path).
+const startupSpinner = createSpinner(`Starting ${APP_NAME} v${pkg.version}...`).start();
 const updatePromise = checkForUpdate();
-killAllAppProcesses(port)
-  .then(() => killProcessOnPort(port))
-  .then(() => startServer(updatePromise));
+stopPreviousInstance(port).then(() => {
+  startupSpinner.stop();
+  startServer(updatePromise);
+});
 
 // Show interface selection menu
 async function showInterfaceMenu(latestVersion) {
@@ -587,7 +468,7 @@ function startServer(updatePromise) {
   function spawnServer() {
     serverStartTime = Date.now();
     crashLog = [];
-    const child = spawn(RUNTIME, ["--dns-result-order=ipv4first", "--max-old-space-size=6144", serverPath], {
+    const child = spawn(RUNTIME, ["--max-old-space-size=6144", serverPath], {
       cwd: standaloneDir,
       stdio: showLog ? "inherit" : ["ignore", "ignore", "pipe"],
       detached: true,
@@ -605,16 +486,23 @@ function startServer(updatePromise) {
         if (crashLog.length > CRASH_LOG_LINES) crashLog = crashLog.slice(-CRASH_LOG_LINES);
       });
     }
+    // Lets the next launch stop exactly this instance without a process scan.
+    try {
+      writePidRecord(launcherPidFile, { cliPid: process.pid, serverPid: child.pid || null, port, exe: path.basename(RUNTIME) });
+    } catch { /* non-fatal: next launch falls back to the port check */ }
     return child;
   }
 
   let server = spawnServer();
+  const bootSpinner = createSpinner("Starting server...");
 
   // Cleanup function - force kill server process
   let isCleaningUp = false;
   function cleanup() {
     if (isCleaningUp) return;
     isCleaningUp = true;
+    bootSpinner.stop();
+    removePidRecordIfOwner(launcherPidFile, process.pid);
     try {
       // Kill tray if running
       try {
@@ -663,7 +551,7 @@ function startServer(updatePromise) {
   });
 
   // Initialize tray icon (runs alongside TUI)
-  const initTrayIcon = () => {
+  const initTrayIcon = (callbacks = {}) => {
     try {
       const { initTray } = require("./src/cli/tray/tray");
       initTray({
@@ -674,10 +562,12 @@ function startServer(updatePromise) {
           cleanup();
           setTimeout(() => process.exit(0), 100);
         },
-        onOpenDashboard: () => openBrowser(url)
+        onOpenDashboard: () => openBrowser(url),
+        ...callbacks
       });
     } catch (err) {
       // Tray not available - continue without it
+      if (typeof callbacks.onError === "function") callbacks.onError(err);
     }
   };
 
@@ -690,17 +580,22 @@ function startServer(updatePromise) {
     console.log(`\n🚀 ${pkg.name} v${pkg.version}`);
     console.log(`Server: http://${displayHost}:${port}`);
 
+    bootSpinner.start();
     waitServerReady(port).then(() => {
-      initTrayIcon();
-      console.log("\n💡 Router is now running in system tray. Close this terminal if you want.");
-      console.log("   Right-click tray icon to open dashboard or quit.\n");
+      bootSpinner.stop();
+      // Only claim the tray is running once the tray process actually became
+      // ready. Reporting it up front hid every failure (missing
+      // libappindicator, EACCES, wrong architecture) behind a success message.
+      initTrayIcon(trayStatusCallbacks({ displayHost, port }));
     });
 
     return;
   }
 
   // Wait for server to be ready, then show interface menu loop + tray
+  bootSpinner.start();
   waitServerReady(port).then(async () => {
+    bootSpinner.stop();
     // Resolve parallel update check (already running); don't block server start on it.
     const latestVersion = await latestVersionPromise;
     // Start tray icon alongside TUI
@@ -718,7 +613,7 @@ function startServer(updatePromise) {
           console.log(`Run this after exit:\n`);
           console.log(`   \x1b[33m${INSTALL_CMD_LATEST}\x1b[0m\n`);
           cleanup();
-          await killAllAppProcesses(port);
+          await killAllAppProcesses();
           await killProcessOnPort(port);
           setTimeout(() => process.exit(0), 200);
           return;
@@ -760,7 +655,7 @@ function startServer(updatePromise) {
           // Windows/Linux: spawn detached bgProcess (systray works fine in child)
           console.log(`\n⏳ Starting background process... (tray icon will appear in ~3s)`);
 
-          const bgProcess = spawn(process.execPath, ["--dns-result-order=ipv4first", __filename, "--tray", "--skip-update", "-p", port.toString()], {
+          const bgProcess = spawn(process.execPath, [__filename, "--tray", "--skip-update", "-p", port.toString()], {
             detached: true,
             stdio: "ignore",
             windowsHide: true,
