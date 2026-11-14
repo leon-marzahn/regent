@@ -7,7 +7,7 @@ import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
 import { isMuseSparkModel } from "../providers/models/helpers.js";
 import { applyFingerprintTools } from "../utils/opencodeFingerprint.js";
-import { opencodeTlsFetch } from "../services/opencodeTlsClient.js";
+import { opencodeTlsFetch, OpencodeTlsUnavailableError } from "../services/opencodeTlsClient.js";
 import { ANTHROPIC_API_VERSION } from "../providers/shared.js";
 import {
   normalizeResponsesInput,
@@ -462,15 +462,27 @@ export class OpenCodeExecutor extends BaseExecutor {
   // no matter how faithful the body is. Route through the impersonating client
   // and keep proxy handling on the existing path (proxyAwareFetch delegates to
   // `directFetch` when no proxy is configured, and passes the resolved proxy
-  // URL through when one is). Fail-open: without wreq-js the request still goes
-  // out on native fetch instead of erroring here.
+  // URL through when one is). Fail-open on the direct path only: without wreq-js
+  // the request goes out on native fetch (the free tier may then refuse it, paid
+  // keys still work). With a proxy selected it fails instead, so it never leaves
+  // the proxy.
   async execute(args) {
     const credentials = this.prepareRequestCredentials(args);
-    const directFetch = (url, options, proxyUrl) => opencodeTlsFetch(url, {
-      method: options.method,
-      headers: options.headers,
-      body: options.body,
-    }, { signal: options.signal, proxyUrl });
+    const directFetch = async (url, options, proxyUrl) => {
+      try {
+        return await opencodeTlsFetch(url, {
+          method: options.method,
+          headers: options.headers,
+          body: options.body,
+        }, { signal: options.signal, proxyUrl });
+      } catch (error) {
+        if (!(error instanceof OpencodeTlsUnavailableError) || proxyUrl) throw error;
+        args.log?.warn?.("OPENCODE", `${error.message}; sending on native fetch`);
+        // Drop the adapter hook: the proxy-aware global fetch would call it again.
+        const { directFetch: _adapter, ...nativeOptions } = options;
+        return fetch(url, nativeOptions);
+      }
+    };
     // wreq-js tunnels the proxy itself; adapters that cannot must stay on undici.
     directFetch.proxyCapable = true;
     const run = () => super.execute({ ...args, credentials, directFetch });
