@@ -1,6 +1,7 @@
-import { describe, it, expect } from "vitest";
-import fs from "node:fs";
+import { describe, it, expect, vi, afterEach } from "vite-plus/test";
 import { buildModelGroups, collectModelValues, NO_AUTH_PROVIDER_IDS } from "@/shared/utils/selectableModels.js";
+import { loadActiveModelValues } from "@/app/(dashboard)/dashboard/cli-tools/connect/activeModels";
+import { initPiExtra, piBody } from "@/app/(dashboard)/dashboard/cli-tools/connect/piCaps";
 
 // Regression: "+ Add All Active Models" on /dashboard/cli-tools/pi used to walk the
 // static provider registry over connection rows only, so it dropped every model the
@@ -121,28 +122,73 @@ describe("buildModelGroups / collectModelValues for Add All Active Models", () =
   });
 });
 
-describe("Add All Active Models uses the shared resolver", () => {
-  const cardSrc = fs.readFileSync(
-    new URL("../../src/app/(dashboard)/dashboard/cli-tools/components/GenericCliToolCard.js", import.meta.url),
-    "utf-8"
-  );
+// Our Pi page is the shared connect panel: "Add all active" calls loadActiveModelValues.
+describe("loadActiveModelValues (connect panel's Add all active)", () => {
+  const responses = (overrides = {}) => ({
+    "/api/providers": { connections: [] },
+    "/api/models/alias": { aliases: {} },
+    "/api/models/custom": { models: [] },
+    "/api/models/disabled": { disabled: {} },
+    ...overrides,
+  });
+  const stubFetch = (map) => {
+    const calls = [];
+    vi.stubGlobal("fetch", async (url) => {
+      calls.push(url);
+      const body = map[url];
+      return body === undefined
+        ? { ok: false, json: async () => ({}) }
+        : { ok: true, json: async () => body };
+    });
+    return calls;
+  };
+  afterEach(() => vi.unstubAllGlobals());
 
-  it("pi card resolves targets through buildModelGroups/collectModelValues", () => {
-    expect(cardSrc).toContain("buildModelGroups");
-    expect(cardSrc).toContain("collectModelValues");
-    expect(cardSrc).toContain("/api/models/custom");
+  it("resolves at click time from providers, aliases, custom and disabled models", async () => {
+    const calls = stubFetch(responses({
+      "/api/models/custom": { models: [{ providerAlias: "oc", id: "big-pickle", type: "llm" }] },
+      "/api/models/disabled": { disabled: { oc: ["union-alpha"] } },
+    }));
+    const values = await loadActiveModelValues();
+    expect(calls).toEqual(expect.arrayContaining(["/api/providers", "/api/models/alias", "/api/models/custom", "/api/models/disabled"]));
+    // No connection rows at all: the no-auth provider is still offered.
+    expect(values).toContain("oc/muse-spark-1.2-contributor-free");
+    expect(values).toContain("oc/big-pickle");
+    expect(values).not.toContain("oc/union-alpha");
   });
 
-  it("pi card no longer derives targets from the static registry alone", () => {
-    expect(cardSrc).not.toMatch(/getModelsByProviderId\(conn\.provider\)/);
+  it("reads live per-account catalogs for active connections only", async () => {
+    const calls = stubFetch(responses({
+      "/api/providers": { connections: [
+        { id: "c1", provider: "cursor", isActive: true },
+        { id: "c2", provider: "cursor", isActive: false },
+      ] },
+      "/api/providers/c1/models": { models: [{ id: "cursor-live-1", name: "Cursor Live" }] },
+    }));
+    const values = await loadActiveModelValues();
+    expect(calls).toContain("/api/providers/c1/models");
+    expect(calls).not.toContain("/api/providers/c2/models");
+    // The live catalog replaces the static registry rows.
+    expect(values.filter((v) => v.startsWith("cu/"))).toEqual(["cu/cursor-live-1"]);
   });
 
-  it("Add All is not gated on having a connection (no-auth providers need none)", () => {
-    expect(cardSrc).not.toMatch(/\{activeProviders\?\.length > 0 && \(\s*<Button[\s\S]{0,200}handleAddAllActiveModels/);
+  it("survives failing endpoints", async () => {
+    stubFetch({});
+    await expect(loadActiveModelValues()).resolves.toEqual(expect.any(Array));
   });
+});
 
-  it("is not registered as a source-only no-op: the button resolves at click time", () => {
-    expect(cardSrc).toMatch(/const handleAddAllActiveModels = async \(\)/);
-    expect(cardSrc).toContain("/api/models/disabled");
+describe("Pi body keeps per-model caps", () => {
+  const base = { baseUrl: "http://localhost:20128/v1", apiKey: "", slots: {}, options: {}, scope: "" };
+
+  it("sends picked caps and leaves unknown models to the route's merge", () => {
+    const extra = initPiExtra({ modelCaps: { "cc/a": { contextWindow: 1000000, maxTokens: 128000 }, "cc/b": { contextWindow: 16384120000 } } });
+    const body = piBody({ ...base, models: ["cc/a", "cc/b", "cc/new"], extra });
+    expect(body.models).toEqual([
+      { id: "cc/a", name: "cc/a", contextWindow: 1000000, maxTokens: 128000 },
+      // Corrupt value from models.json falls back to the default instead of being written back.
+      { id: "cc/b", name: "cc/b", contextWindow: 200000, maxTokens: 64000 },
+      { id: "cc/new", name: "cc/new" },
+    ]);
   });
 });

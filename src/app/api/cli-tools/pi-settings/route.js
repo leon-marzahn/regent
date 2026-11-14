@@ -2,7 +2,7 @@
 
 import { NextResponse } from "next/server";
 import { configWriter } from "../configFile.js";
-import { piCurrent } from "../currentSummary.js";
+import { piCurrent, piModelCaps } from "../currentSummary.js";
 import { resolveCliApiKey } from "../resolveApiKey.js";
 import fs from "fs/promises";
 import path from "path";
@@ -97,6 +97,7 @@ export async function GET() {
       installed: true,
       hasRegent: hasRegentConfig(config),
       current: piCurrent(config),
+      modelCaps: piModelCaps(config),
       configPath,
     });
   } catch (err) {

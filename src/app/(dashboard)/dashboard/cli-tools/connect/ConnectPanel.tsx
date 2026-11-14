@@ -9,6 +9,7 @@ import { SPECS, bodyFor, settingsUrl, withV1, type Extra, type ToolStatus, type 
 import { ModelPick } from "./extras";
 import { ComboDialog, ManualConfigDialog } from "./dialogs";
 import { hasManual } from "./manual";
+import { loadActiveModelValues } from "./activeModels";
 import { deleteEndpoint, saveEndpoint, useSavedEndpoints } from "./savedEndpoints";
 import { maskKey, useConnectContext } from "./useConnectContext";
 
@@ -40,6 +41,7 @@ export function ConnectPanel({ toolId, toolName, onChanged }: { toolId: string; 
   const [keyId, setKeyId] = useState<string>("");
   const [models, setModels] = useState<string[]>([]);
   const [picking, setPicking] = useState(false);
+  const [addingAll, setAddingAll] = useState(false);
   const [busy, setBusy] = useState<null | "apply" | "remove" | "restore">(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [canRestore, setCanRestore] = useState(false);
@@ -126,6 +128,20 @@ export function ConnectPanel({ toolId, toolName, onChanged }: { toolId: string; 
       notify().error((e as Error).message);
     } finally {
       setBusy(null);
+    }
+  };
+
+  // Not gated on connections: no-auth providers (OpenCode Free) have none.
+  const addAllActive = async () => {
+    setAddingAll(true);
+    try {
+      const all = await loadActiveModelValues();
+      if (all.length === 0) notify().error("No active models found to add.");
+      else setModels((prev) => Array.from(new Set([...prev, ...all])));
+    } catch (e) {
+      notify().error((e as Error).message);
+    } finally {
+      setAddingAll(false);
     }
   };
 
@@ -276,6 +292,11 @@ export function ConnectPanel({ toolId, toolName, onChanged }: { toolId: string; 
               {spec.comboShortcut && (
                 <Button size="sm" variant="ghost" icon="add" disabled={!!busy} onClick={() => setCombo(true)}>
                   New combo
+                </Button>
+              )}
+              {spec.addAllModels && (
+                <Button size="sm" variant="ghost" icon="playlist_add" loading={addingAll} disabled={!!busy || addingAll} onClick={() => void addAllActive()}>
+                  {addingAll ? "Adding…" : "Add all active"}
                 </Button>
               )}
               <Button size="sm" icon={spec.multi ? "add" : "swap_horiz"} onClick={() => setPicking(true)}>

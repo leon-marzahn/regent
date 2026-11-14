@@ -179,6 +179,20 @@ export const piCurrent = (config) => {
   };
 };
 
+// Per-model context window / max output from Pi's models.json, so the card can
+// show and keep what's set there. Numbers only; nothing else from the entry leaves.
+export const piModelCaps = (config) => {
+  const caps = {};
+  for (const m of pickProvider(config?.providers)?.models || []) {
+    if (!has(m?.id)) continue;
+    const entry = {};
+    if (Number.isFinite(m.contextWindow)) entry.contextWindow = m.contextWindow;
+    if (Number.isFinite(m.maxTokens)) entry.maxTokens = m.maxTokens;
+    caps[m.id] = entry;
+  }
+  return caps;
+};
+
 // Oh My Pi models.yml (raw text). POST writes no model: omp discovers them via the proxy.
 export const ompCurrent = (content) => {
   if (!content) return null;

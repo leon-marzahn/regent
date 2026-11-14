@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import { CLI_TOOLS } from "@/shared/constants/cliTools.js";
 import { ClaudeExtras, CodexProfiles, CoworkPlugins, HermesExtras } from "./extras";
+import { PiModelCaps, initPiExtra, piBody } from "./piCaps";
 
 /**
  * How the shared connect panel drives each tool. Every settings route takes
@@ -87,6 +88,8 @@ export interface ToolSpec {
   comboShortcut?: boolean;
   /** Excluded from "Connect all" (needs more than one model to make sense). */
   noBulk?: boolean;
+  /** Offer "Add all active models" beside the picker (list tools). */
+  addAllModels?: boolean;
 }
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
@@ -267,7 +270,14 @@ export const SPECS: Record<string, ToolSpec> = {
   smelt: { file: "~/.smelt/config.json" },
   codewhale: { file: "~/.codewhale/config.toml" },
   omp: { file: "~/.omp/agent/models.yml" },
-  pi: { multi: true, file: "~/.pi/agent/models.json" },
+  pi: {
+    multi: true,
+    file: "~/.pi/agent/models.json",
+    addAllModels: true,
+    Extras: PiModelCaps,
+    initExtra: initPiExtra,
+    body: piBody,
+  },
   jcode: { multi: true, file: "~/.jcode/config.toml (+ key in ~/.config/jcode)" },
 };
 
