@@ -54,6 +54,19 @@ describe("proxyFetch insecure-TLS fallback is opt-in", () => {
     expect(hints()).toBe(2);
   });
 
+  it("bounds the hint's host memory and tolerates unparsable URLs", async () => {
+    const { createTlsFailureHint } = await import("../../open-sse/utils/tlsFailureHint.js");
+    const warn = vi.fn();
+    const hint = createTlsFailureHint({ warn, mask: (s) => s.replace(/key=[^&]+/, "key=[REDACTED]") });
+    const err = certError();
+    expect(hint("not a url", err)).toBe(true);
+    expect(hint("https://h.test/?key=sk-1", err)).toBe(true);
+    expect(warn.mock.calls[1][0]).toMatch(/key=\[REDACTED\]/);
+    expect(warn.mock.calls[1][0]).toMatch(/SELF_SIGNED_CERT_IN_CHAIN/);
+    for (let i = 0; i < 100; i++) hint(`https://h${i}.example/`, err);
+    expect(warn).toHaveBeenCalledTimes(64);
+  });
+
   it("retries with an insecure dispatcher only when REGENT_ALLOW_INSECURE_TLS is set", async () => {
     process.env.REGENT_ALLOW_INSECURE_TLS = "1";
     const { proxyAwareFetch } = await load();

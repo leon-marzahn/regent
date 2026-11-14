@@ -225,6 +225,7 @@ export default defineConfig({
       "/open-sse/utils/*",
       "!/open-sse/utils/tlsImpersonation.js",
       "!/open-sse/utils/proxyScope.js",
+      "!/open-sse/utils/tlsFailureHint.js",
       "!/open-sse/config",
       "/open-sse/config/*",
       "!/open-sse/config/tlsImpersonation.js",
