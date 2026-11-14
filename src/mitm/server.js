@@ -13,6 +13,12 @@ const { generateCert, getCertForDomain } = require("./cert/generate");
 const { getMitmAlias } = require("./dbReader");
 const { applyAntigravityIdeVersionOverride } = require("./antigravityIdeVersion");
 const { killPortListeners } = require("./portOwner");
+
+// Forwarded IDE traffic carries the user's provider tokens, so upstream certificates
+// are verified (servername is always set). Same opt-in as open-sse proxyFetch:
+// REGENT_ALLOW_INSECURE_TLS=1 skips verification, STRICT_SSL vetoes it.
+const truthyEnv = (v) => v === "1" || v === "true";
+const VERIFY_UPSTREAM_TLS = !(truthyEnv(process.env.REGENT_ALLOW_INSECURE_TLS) && !truthyEnv(process.env.STRICT_SSL));
 const LOCAL_PORT = 443;
 const IS_WIN = process.platform === "win32";
 const ENABLE_FILE_LOG = IS_DEV;
@@ -162,7 +168,7 @@ async function negotiateAlpn(host) {
   return new Promise((resolve, reject) => {
     const socket = tls.connect({
       host: ip, port: 443, servername: host,
-      ALPNProtocols: ["h2", "http/1.1"], rejectUnauthorized: false,
+      ALPNProtocols: ["h2", "http/1.1"], rejectUnauthorized: VERIFY_UPSTREAM_TLS,
     }, () => {
       const proto = socket.alpnProtocol || "http/1.1";
       alpnCache.set(host, proto);
@@ -195,7 +201,7 @@ async function passthroughHttp2(req, res, bodyBuffer, headers, targetHost, onRes
     const client = http2.connect(`https://${targetHost}`, {
       createConnection: () => tls.connect({
         host: targetIP, port: 443, servername: targetHost,
-        ALPNProtocols: ["h2"], rejectUnauthorized: false,
+        ALPNProtocols: ["h2"], rejectUnauthorized: VERIFY_UPSTREAM_TLS,
       }),
     });
     client.once("error", (e) => {
@@ -257,7 +263,7 @@ async function passthroughHttps(req, res, bodyBuffer, headers, targetHost, onRes
     method: req.method,
     headers,
     servername: targetHost,
-    rejectUnauthorized: false
+    rejectUnauthorized: VERIFY_UPSTREAM_TLS
   }, (forwardRes) => {
     res.writeHead(forwardRes.statusCode, forwardRes.headers);
     if (dumper) dumper.writeHeader(forwardRes.statusCode, forwardRes.headers);

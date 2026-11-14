@@ -155,6 +155,19 @@ function isTlsCertError(err) {
   const code = err?.cause?.code || err?.code;
   return TLS_CERT_ERRORS.has(code);
 }
+
+// Retrying a failed-verification request with verification off hands the request —
+// provider credentials included — to whoever presented the bad certificate. So the
+// fallback is opt-in (REGENT_ALLOW_INSECURE_TLS=1), for networks whose TLS-inspecting
+// proxy can't be trusted via NODE_EXTRA_CA_CERTS; STRICT_SSL / strictTls still veto it.
+function isTruthyEnv(value) {
+  return value === "1" || value === "true";
+}
+export function allowInsecureTlsFallback(options = {}) {
+  if (options.strictTls === true || isTruthyEnv(process.env.STRICT_SSL)) return false;
+  return isTruthyEnv(process.env.REGENT_ALLOW_INSECURE_TLS);
+}
+let insecureHintLogged = false;
 const MITM_BYPASS_HOSTS = [
   "cloudcode-pa.googleapis.com",
   "daily-cloudcode-pa.googleapis.com",
@@ -413,12 +426,18 @@ async function fetchWithTlsFallback(url, options, proxyUrl, impersonation = null
     const dispatcher = await getDispatcher(proxyUrl, false, forceFreshSocket, ecdhCurveFor(url));
     return await rawFetch(url, { ...options, dispatcher });
   } catch (err) {
-    const isStrictSsl = options.strictTls === true || process.env.STRICT_SSL === "true" || process.env.STRICT_SSL === "1";
-    if (!isStrictSsl && isTlsCertError(err)) {
+    if (isTlsCertError(err) && !allowInsecureTlsFallback(options)) {
+      if (!insecureHintLogged) {
+        insecureHintLogged = true;
+        console.warn(`[ProxyFetch] TLS cert verification failed (${err.cause?.code || err.code}): ${maskString(String(url))}. Behind a TLS-inspecting proxy, add its CA with NODE_EXTRA_CA_CERTS (or, at your own risk, set REGENT_ALLOW_INSECURE_TLS=1).`);
+      }
+      throw err;
+    }
+    if (isTlsCertError(err)) {
       if (!isBodyReplaySafe(options.body)) {
         throw err;
       }
-      // ponytail: in-memory insecure agent fallback for self-signed MITM corporate/antivirus certs
+      // Opt-in insecure agent fallback for self-signed MITM corporate/antivirus certs
       console.warn(`[ProxyFetch] TLS cert verification failed (${err.cause?.code || err.code}), retrying with insecure TLS: ${maskString(String(url))}`);
       const insecureDispatcher = await getDispatcher(proxyUrl, true, forceFreshSocket, ecdhCurveFor(url));
       return await rawFetch(url, { ...options, dispatcher: insecureDispatcher });

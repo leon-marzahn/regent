@@ -79,21 +79,36 @@ describe("request logger legacy paths", () => {
   });
 });
 
-describe("insecure TLS retry warning", () => {
-  it("does not print a ?key= value", async () => {
+describe("TLS cert failure warnings", () => {
+  // Default: fail closed with a hint; opt-in (REGENT_ALLOW_INSECURE_TLS): retry warning.
+  // Neither may print a ?key= value.
+  it.each([
+    ["the fail-closed hint", undefined, "NODE_EXTRA_CA_CERTS"],
+    ["the opt-in retry warning", "1", "insecure TLS"],
+  ])("%s does not print a ?key= value", async (_label, optIn, expected) => {
     vi.resetModules();
+    const saved = process.env.REGENT_ALLOW_INSECURE_TLS;
+    if (optIn) process.env.REGENT_ALLOW_INSECURE_TLS = optIn;
+    else delete process.env.REGENT_ALLOW_INSECURE_TLS;
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const err = Object.assign(new Error("self signed"), { code: "DEPTH_ZERO_SELF_SIGNED_CERT" });
     const fetchStub = vi.fn().mockRejectedValueOnce(err).mockResolvedValue(new Response("ok"));
     // proxyFetch sends through the undici package's fetch.
     vi.doMock("undici", async (importOriginal) => ({ ...(await importOriginal()), fetch: fetchStub }));
-    const { proxyAwareFetch } = await import("../../open-sse/utils/proxyFetch.js");
-    await proxyAwareFetch(`https://x.test/v1?key=${KEY}`, { method: "GET" }).catch(() => {});
-    vi.doUnmock("undici");
-    expect(fetchStub).toHaveBeenCalledTimes(2);
+    try {
+      const { proxyAwareFetch } = await import("../../open-sse/utils/proxyFetch.js");
+      await proxyAwareFetch(`https://x.test/v1?key=${KEY}`, { method: "GET" }).catch(() => {});
+    } finally {
+      vi.doUnmock("undici");
+      if (saved === undefined) delete process.env.REGENT_ALLOW_INSECURE_TLS;
+      else process.env.REGENT_ALLOW_INSECURE_TLS = saved;
+    }
+    // Fail-closed sends once; the opt-in retries once more.
+    expect(fetchStub).toHaveBeenCalledTimes(optIn ? 2 : 1);
     const printed = warn.mock.calls.flat().join(" ");
-    expect(printed).toContain("insecure TLS");
+    expect(printed).toContain(expected);
     expect(printed).not.toContain(KEY);
+    warn.mockRestore();
   });
 });
 
