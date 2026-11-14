@@ -6,7 +6,7 @@
 // endpoint. Tor on 127.0.0.1:9050 is used when available; otherwise set
 // WREQ_PROXY_TEST_SOCKS5 to a socks5 URL. Skipped (not failed) when neither
 // is reachable, so this never breaks CI on a sandboxed runner.
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vite-plus/test";
 import net from "node:net";
 
 const SOCKS5 = process.env.WREQ_PROXY_TEST_SOCKS5 || "socks5://127.0.0.1:9050";

@@ -9,7 +9,7 @@
 //      200, the body read rejects — no retry layer covers this.
 //   C. dead proxy → proxyAwareFetch falls back to direct unless the channel
 //      pins strictProxy, in which case it refuses to leak the direct path.
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vite-plus/test";
 import http from "node:http";
 import { BaseExecutor } from "../../open-sse/executors/base.js";
 import { formatProviderError } from "../../open-sse/utils/error.js";

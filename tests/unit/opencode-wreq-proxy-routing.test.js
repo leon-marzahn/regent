@@ -12,7 +12,7 @@
 // Regression class: "the pool is configured, a proxy was selected, and the
 // request still left through the server's direct interface" — configuration
 // without transport participation.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
 
 const { createSessionMock, loadRuntimeDepMock, makeSession } = vi.hoisted(() => ({
   createSessionMock: vi.fn(),

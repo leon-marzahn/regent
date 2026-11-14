@@ -1,7 +1,7 @@
 // The executor must forward the proxy URL it is handed by proxyAwareFetch.
 // Isolated from the transport tests: mocking opencodeTlsClient.js here would
 // otherwise replace the real module under test in sibling suites.
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi } from "vite-plus/test";
 
 const { tlsFetchMock } = vi.hoisted(() => ({ tlsFetchMock: vi.fn() }));
 vi.mock("../../open-sse/services/opencodeTlsClient.js", () => ({

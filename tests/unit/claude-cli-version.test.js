@@ -1,7 +1,7 @@
 // The live Claude CLI version (open-sse/utils/claudeCliVersion.js): the header
 // rewrite, the version floor, and that the npm lookup leaves through the
 // request's connection proxy instead of a direct socket.
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vite-plus/test";
 import http from "node:http";
 
 const ENV_KEYS = ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy", "CLAUDE_CLI_VERSION"];
