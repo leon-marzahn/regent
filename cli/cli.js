@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { spawn, exec, execSync, execFileSync } = require("child_process");
+const { spawn, exec, execSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const https = require("https");
@@ -66,13 +66,12 @@ const pkg = require("./package.json");
 const {
   getPidFilePath,
   writePidRecord,
-  readPidRecord,
   removePidRecordIfOwner,
-  stopRecordedInstance,
-  isPortInUse,
-  waitForPortFree,
-  waitForPidsExit,
-  parsePid,
+  killCloudflaredForPort,
+  killAppProcesses,
+  killPortListener,
+  stopPreviousInstance: stopRecordedLauncher,
+  trayStatusCallbacks,
 } = require("./src/cli/utils/launcherProcess");
 const { ensureSqliteRuntime, buildEnvWithRuntime } = require("./hooks/sqliteRuntime");
 const { ensureTrayRuntime } = require("./hooks/trayRuntime");
@@ -251,116 +250,13 @@ function killTunnelByPidFile() {
 // Kill cloudflared whose --url targets this app's port (covers stale PID file case).
 // Runs the process scan asynchronously so it never blocks launcher startup.
 function killCloudflaredByAppPort(appPort) {
-  if (!appPort) return;
-  const portMatchers = [`localhost:${appPort}`, `127.0.0.1:${appPort}`];
-  const isWin = process.platform === "win32";
-  const scanCmd = isWin
-    ? `powershell -NonInteractive -WindowStyle Hidden -Command "Get-WmiObject Win32_Process -Filter 'Name=\\"cloudflared.exe\\"' | Select-Object ProcessId,CommandLine | ConvertTo-Csv -NoTypeInformation"`
-    : "ps -eo pid,command 2>/dev/null";
-  exec(scanCmd, { encoding: "utf8", windowsHide: true, timeout: 5000 }, (err, output) => {
-    if (err || !output) return;
-    const pids = [];
-    const lines = isWin ? output.split("\n").slice(1) : output.split("\n");
-    lines.forEach(line => {
-      if (!portMatchers.some(m => line.includes(m))) return;
-      const pid = isWin
-        ? parsePid(line.match(/^"(\d+)"/)?.[1])
-        : line.includes("cloudflared") ? parsePid(line.trim().split(/\s+/)[0]) : null;
-      if (pid && pid !== process.pid) pids.push(pid);
-    });
-    pids.forEach(pid => {
-      try {
-        if (isWin) execFileSync("taskkill", ["/F", "/T", "/PID", String(pid)], { stdio: "ignore", windowsHide: true, timeout: 3000 });
-        else process.kill(pid, "SIGKILL");
-      } catch { }
-    });
-  });
+  killCloudflaredForPort(appPort);
 }
 
 // Kill all app processes (full machine-wide scan — slow on Windows, so the
 // launcher only uses it as a fallback; see stopPreviousInstance).
 function killAllAppProcesses() {
-  return new Promise((resolve) => {
-    try {
-      const platform = process.platform;
-      let pids = [];
-
-      if (platform === "win32") {
-        // Windows: use WMI to get full CommandLine (tasklist /V doesn't include it)
-        try {
-          const psCmd = `powershell -NonInteractive -WindowStyle Hidden -Command "Get-WmiObject Win32_Process -Filter 'Name=\\"node.exe\\"' | Select-Object ProcessId,CommandLine | ConvertTo-Csv -NoTypeInformation"`;
-          const output = execSync(psCmd, {
-            encoding: "utf8",
-            windowsHide: true,
-            timeout: 5000
-          });
-          const lines = output.split("\n").slice(1).filter(l => l.trim());
-          lines.forEach(line => {
-            // Whitelist: real node process running regent (or legacy 9router) cli.js.
-            // Avoids killing editors/grep/strace/cursor that just have the name in cmdline.
-            // No bare "next-server" match: that title is shared by every Next.js app on the
-            // machine. Our own server is stopped via the PID record or by killProcessOnPort.
-            const cmd = line.toLowerCase();
-            const isAppProcess =
-              cmd.includes("node") && PROCESS_IDENTIFIERS.some((id) => cmd.includes(id) && (cmd.includes("cli.js") || cmd.includes(`\\${id}`) || cmd.includes(`/${id}`)));
-            if (isAppProcess) {
-              const pid = parsePid(line.match(/^"(\d+)"/)?.[1]);
-              if (pid && pid !== process.pid) pids.push(pid);
-            }
-          });
-        } catch (e) {
-          // No processes found or error - continue
-        }
-      } else {
-        // macOS/Linux: use ps to find all matching processes
-        try {
-          const output = execSync('ps aux 2>/dev/null', {
-            encoding: 'utf8',
-            timeout: 5000
-          });
-          const lines = output.split('\n');
-
-          lines.forEach(line => {
-            // Whitelist: real node process running regent (or legacy 9router) cli.js.
-            // Avoids killing grep/strace/editors/cursor that incidentally match the name.
-            // No bare "next-server" match (shared by every Next.js app; see the win32 branch).
-            const cmd = line.toLowerCase();
-            const isAppProcess =
-              cmd.includes("node") && PROCESS_IDENTIFIERS.some((id) => cmd.includes(id) && (cmd.includes("cli.js") || cmd.includes(`/${id}`)));
-            if (isAppProcess) {
-              const pid = parsePid(line.trim().split(/\s+/)[1]);
-              if (pid && pid !== process.pid) pids.push(pid);
-            }
-          });
-        } catch (e) {
-          // No processes found or error - continue
-        }
-      }
-
-      // Kill all found processes
-      if (pids.length > 0) {
-        pids.forEach(pid => {
-          try {
-            if (platform === "win32") {
-              execFileSync("taskkill", ["/F", "/PID", String(pid)], { stdio: 'ignore', windowsHide: true, timeout: 3000 });
-            } else {
-              process.kill(pid, "SIGKILL");
-            }
-          } catch (err) {
-            // Process already dead or can't kill - continue
-          }
-        });
-
-        // Wait for processes to terminate — returns as soon as they are gone.
-        waitForPidsExit(pids, { timeoutMs: PROCESS_EXIT_WAIT_MS }).then(() => resolve());
-      } else {
-        resolve();
-      }
-    } catch (err) {
-      // Silent fail - continue anyway
-      resolve();
-    }
-  });
+  return killAppProcesses(PROCESS_IDENTIFIERS, { exitWaitMs: PROCESS_EXIT_WAIT_MS });
 }
 
 // Sleep helper using SharedArrayBuffer wait (sync, no busy-loop)
@@ -412,53 +308,7 @@ function killProxyByPidFile() {
 
 // Kill any process on specific port
 function killProcessOnPort(port) {
-  return new Promise((resolve) => {
-    try {
-      const platform = process.platform;
-      let pid;
-
-      if (platform === "win32") {
-        try {
-          const output = execSync(`netstat -ano | findstr :${port}`, {
-            encoding: 'utf8',
-            shell: true,
-            windowsHide: true,
-            timeout: 5000
-          }).trim();
-          const lines = output.split('\n').filter(l => l.includes('LISTENING'));
-          if (lines.length > 0) {
-            pid = parsePid(lines[0].trim().split(/\s+/).pop());
-            if (pid && pid !== process.pid) {
-              execFileSync("taskkill", ["/F", "/PID", String(pid)], { stdio: 'ignore', windowsHide: true, timeout: 3000 });
-            }
-          }
-        } catch (e) {
-          // Port is free or error
-        }
-      } else {
-        // macOS/Linux
-        try {
-          const pidOutput = execSync(`lsof -ti:${port}`, {
-            encoding: 'utf8',
-            stdio: ['pipe', 'pipe', 'ignore']
-          }).trim();
-          if (pidOutput) {
-            pid = parsePid(pidOutput.split('\n')[0]);
-            if (pid && pid !== process.pid) process.kill(pid, "SIGKILL");
-          }
-        } catch (e) {
-          // Port is free or error
-        }
-      }
-
-      // Wait for the port only when something was killed; return once it is free.
-      if (pid) waitForPortFree(port, { timeoutMs: PORT_RELEASE_WAIT_MS }).then(() => resolve());
-      else resolve();
-    } catch (err) {
-      // Silent fail - continue anyway
-      resolve();
-    }
-  });
+  return killPortListener(port, { releaseWaitMs: PORT_RELEASE_WAIT_MS });
 }
 
 
@@ -523,7 +373,7 @@ const launcherPidFile = getPidFilePath(getAppDataDir());
 // Stop the previous launcher by its PID record (fast path). The machine-wide
 // process scan (~0.5s per PowerShell call on Windows) runs only when the port is
 // still occupied afterwards, e.g. by a launcher from a version without a record.
-async function stopPreviousInstance(appPort) {
+function stopPreviousInstance(appPort) {
   // MITM + tunnel run on separate ports/processes — killing them doesn't free the
   // app port, so keep them off the critical path.
   // Server-side MITM manager has stale-lock recovery and starts deferred (~3s).
@@ -533,13 +383,13 @@ async function stopPreviousInstance(appPort) {
     try { killCloudflaredByAppPort(appPort); } catch {}
   });
 
-  const killed = stopRecordedInstance(readPidRecord(launcherPidFile));
-  try { fs.unlinkSync(launcherPidFile); } catch { }
-  if (killed.length > 0) await waitForPidsExit(killed, { timeoutMs: PROCESS_EXIT_WAIT_MS });
-
-  if (!(await isPortInUse(appPort))) return;
-  await killAllAppProcesses();
-  await killProcessOnPort(appPort);
+  return stopRecordedLauncher({
+    pidFile: launcherPidFile,
+    port: appPort,
+    exitWaitMs: PROCESS_EXIT_WAIT_MS,
+    killAll: killAllAppProcesses,
+    killOnPort: killProcessOnPort,
+  });
 }
 
 // Show progress immediately; run update check in parallel (not on the critical path).
@@ -736,17 +586,7 @@ function startServer(updatePromise) {
       // Only claim the tray is running once the tray process actually became
       // ready. Reporting it up front hid every failure (missing
       // libappindicator, EACCES, wrong architecture) behind a success message.
-      initTrayIcon({
-        onReady: () => {
-          console.log("\n💡 Router is now running in system tray. Close this terminal if you want.");
-          console.log("   Right-click tray icon to open dashboard or quit.\n");
-        },
-        onError: (err) => {
-          console.log("\n⚠️  No tray icon — the server keeps running.");
-          if (err?.message) console.log(`   ${err.message.split("\n").join("\n   ")}`);
-          console.log(`   Dashboard: http://${displayHost}:${port}\n`);
-        }
-      });
+      initTrayIcon(trayStatusCallbacks({ displayHost, port }));
     });
 
     return;
