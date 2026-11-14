@@ -167,7 +167,16 @@ export function allowInsecureTlsFallback(options = {}) {
   if (options.strictTls === true || isTruthyEnv(process.env.STRICT_SSL)) return false;
   return isTruthyEnv(process.env.REGENT_ALLOW_INSECURE_TLS);
 }
-let insecureHintLogged = false;
+// Hosts already given the fail-closed hint (bounded: one line per host, not per request).
+const tlsHintHosts = new Set();
+const TLS_HINT_HOSTS_MAX = 64;
+function tlsHintHost(url) {
+  try {
+    return new URL(typeof url === "string" ? url : url.toString()).host;
+  } catch {
+    return "?";
+  }
+}
 const MITM_BYPASS_HOSTS = [
   "cloudcode-pa.googleapis.com",
   "daily-cloudcode-pa.googleapis.com",
@@ -427,9 +436,10 @@ async function fetchWithTlsFallback(url, options, proxyUrl, impersonation = null
     return await rawFetch(url, { ...options, dispatcher });
   } catch (err) {
     if (isTlsCertError(err) && !allowInsecureTlsFallback(options)) {
-      if (!insecureHintLogged) {
-        insecureHintLogged = true;
-        console.warn(`[ProxyFetch] TLS cert verification failed (${err.cause?.code || err.code}): ${maskString(String(url))}. Behind a TLS-inspecting proxy, add its CA with NODE_EXTRA_CA_CERTS (or, at your own risk, set REGENT_ALLOW_INSECURE_TLS=1).`);
+      const hintHost = tlsHintHost(url);
+      if (!tlsHintHosts.has(hintHost) && tlsHintHosts.size < TLS_HINT_HOSTS_MAX) {
+        tlsHintHosts.add(hintHost);
+        console.warn(`[ProxyFetch] TLS cert verification failed (${err.cause?.code || err.code}): ${maskString(String(url))}. Behind a TLS-inspecting proxy, add its CA with NODE_EXTRA_CA_CERTS in the server's own environment (or, at your own risk, set REGENT_ALLOW_INSECURE_TLS=1).`);
       }
       throw err;
     }

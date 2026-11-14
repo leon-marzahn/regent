@@ -43,6 +43,17 @@ describe("proxyFetch insecure-TLS fallback is opt-in", () => {
     expect(String(console.warn.mock.calls[0]?.[0])).not.toMatch(/sk-secret/);
   });
 
+  it("gives the fail-closed hint once per host, not once per process", async () => {
+    fetchMock.mockReset().mockRejectedValue(certError());
+    const { proxyAwareFetch } = await load();
+    const hints = () => console.warn.mock.calls.filter((c) => /NODE_EXTRA_CA_CERTS/.test(String(c[0]))).length;
+    await proxyAwareFetch(URL_, OPTS).catch(() => {});
+    await proxyAwareFetch(`${URL_}?again=1`, OPTS).catch(() => {});
+    expect(hints()).toBe(1);
+    await proxyAwareFetch("https://other-upstream.example/v1", OPTS).catch(() => {});
+    expect(hints()).toBe(2);
+  });
+
   it("retries with an insecure dispatcher only when REGENT_ALLOW_INSECURE_TLS is set", async () => {
     process.env.REGENT_ALLOW_INSECURE_TLS = "1";
     const { proxyAwareFetch } = await load();
