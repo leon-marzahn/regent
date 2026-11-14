@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { handleImageGenerationCore } from "../../open-sse/handlers/imageGenerationCore.js";
 import { getExecutor } from "../../open-sse/executors/index.js";
 
@@ -162,6 +162,18 @@ describe("legacy Codex image Responses compatibility", () => {
     expect(result.success).toBe(true);
     expect(fetchMock.mock.calls[0][0]).toBe("https://chatgpt.com/backend-api/codex/images/edits");
     expect(JSON.parse(fetchMock.mock.calls[0][1].body).images).toEqual([{ image_url: "data:image/png;base64,cmVm" }]);
+  });
+
+  // SSRF: a client image URL is handed to the upstream as a reference; the gateway never fetches it.
+  it("forwards a client image URL in a native edit without fetching it server-side", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const internalUrl = "http://169.254.169.254/latest/meta-data";
+    const result = await handleImageGenerationCore(request({ body: { prompt: "Edit this image", image: internalUrl } }));
+    expect(result.success).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("https://chatgpt.com/backend-api/codex/images/edits");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).images).toEqual([{ image_url: internalUrl }]);
   });
 
   it.each([
