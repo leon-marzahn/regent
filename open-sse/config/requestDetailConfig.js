@@ -1,9 +1,12 @@
 import { FORMATS } from "../translator/formats.js";
 
 // Which body fields the Usage request detail keeps from the client's request.
-// The detail is built from the client body in its own wire format, so every
-// format lists where it carries the prompt. Only listed fields are stored:
-// anything else in the body (unknown keys a client might put a key in) is dropped.
+// The detail is built from a snapshot of the client body in its own wire
+// format, taken before translation; each format lists where it carries the
+// prompt. Gemini-native /v1beta clients are converted to OpenAI before chatCore,
+// so the Gemini entries only cover Gemini-shaped bodies sent to /v1/*.
+// Only listed fields are stored: anything else in the body (unknown keys a
+// client might put a key in) is dropped.
 
 // Prompt/content fields per client wire format.
 export const REQUEST_CONTENT_FIELDS = {
@@ -25,6 +28,8 @@ export const REQUEST_DETAIL_PARAMS = [
   "max_completion_tokens",
   "max_output_tokens",
   "thinking",
+  "output_config",
+  "context_management",
   "reasoning",
   "reasoning_effort",
   "enable_thinking",
@@ -53,6 +58,7 @@ export const REQUEST_DETAIL_PARAMS = [
   "generationConfig",
   "safetySettings",
   "toolConfig",
+  "cachedContent",
 ];
 
 // A body only carries its own format's fields, so the union is safe to read

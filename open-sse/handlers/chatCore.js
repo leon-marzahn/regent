@@ -70,6 +70,10 @@ export function stripContinuityFields(body) {
 export async function handleChatCore({ traceAttempt = null, body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, customPromptEnabled, customPrompt, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, pxpipeUnavailableReason, onPxpipeEvent, sourceFormatOverride, providerThinking, providerOverrides, clientSignal = null }) {
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
+  // The client request as sent, for the Usage detail. Same-format translation
+  // returns `body` itself and edits it in place (thinking fields, model), so
+  // keep a shallow snapshot taken before any of that.
+  const clientBody = { ...body };
   // Stable per-session color so all lines of one CLI conversation share a tag
   const sessionSeed = (() => {
     try {
@@ -461,7 +465,7 @@ export async function handleChatCore({ traceAttempt = null, body, modelInfo, cre
       provider, model, connectionId,
       latency: { ttft: 0, total: Date.now() - requestStartTime },
       tokens: { prompt_tokens: 0, completion_tokens: 0 },
-      request: extractRequestConfig(body, stream, clientRawRequest?.regentHeaders),
+      request: extractRequestConfig(clientBody, stream, clientRawRequest?.regentHeaders),
       providerRequest: translatedBody || null,
       response: { error: error.message || String(error), status: error.name === "AbortError" ? 499 : 502, thinking: null },
       pxpipe: pxpipeSummary,
@@ -573,7 +577,7 @@ export async function handleChatCore({ traceAttempt = null, body, modelInfo, cre
       provider, model, connectionId,
       latency: { ttft: 0, total: Date.now() - requestStartTime },
       tokens: { prompt_tokens: 0, completion_tokens: 0 },
-      request: extractRequestConfig(body, stream, clientRawRequest?.regentHeaders),
+      request: extractRequestConfig(clientBody, stream, clientRawRequest?.regentHeaders),
       providerRequest: finalBody || translatedBody || null,
       response: { error: message, status: statusCode, thinking: null },
       pxpipe: pxpipeSummary,
@@ -589,7 +593,7 @@ export async function handleChatCore({ traceAttempt = null, body, modelInfo, cre
     return createErrorResult(statusCode, errMsg, resetsAtMs, upstreamResponseHeaders(providerResponse.headers));
   }
 
-  const sharedCtx = { traceAttempt, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, pxpipe: pxpipeSummary, reqTag, log };
+  const sharedCtx = { traceAttempt, provider, model, body, clientBody, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, pxpipe: pxpipeSummary, reqTag, log };
   const appendLog = (extra) => appendRequestLog({ model, provider, connectionId, ...extra }).catch(() => { });
   const trackDone = () => trackPendingRequest(model, provider, connectionId, false);
 

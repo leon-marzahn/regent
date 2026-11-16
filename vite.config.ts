@@ -237,6 +237,7 @@ export default defineConfig({
       "!/tests/unit/providers-live-stream.test.js",
       "!/tests/unit/tls-impersonation.test.js",
       "!/tests/unit/request-detail-client-request.test.js",
+      "!/tests/unit/request-detail-client-body.test.js",
       "!/tests/unit/tls-impersonation-connection-api.test.js",
       "!/tests/unit/refresh-connection-proxy.test.js",
       "!/tests/unit/update-check.test.js",
