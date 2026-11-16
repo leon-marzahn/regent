@@ -68,7 +68,7 @@ function sanitizeHeaders(headers) {
   return sanitized;
 }
 
-export const __test__ = { sanitizeHeaders, resetConfigCache: () => { cachedConfig = null; } };
+export const __test__ = { sanitizeHeaders, truncateRequest, resetConfigCache: () => { cachedConfig = null; } };
 
 function generateDetailId(model) {
   const timestamp = new Date().toISOString();
@@ -83,6 +83,14 @@ function truncateField(obj, maxSize) {
     return { _truncated: true, _originalSize: str.length, _preview: str.substring(0, 200) };
   }
   return obj || {};
+}
+
+// Large requests (most agent traffic) get truncated; keep the small regent
+// headers block so the Usage drawer can still show what the client sent.
+function truncateRequest(request, maxSize) {
+  const truncated = truncateField(request, maxSize);
+  if (truncated._truncated && request?.regentHeaders) truncated.regentHeaders = request.regentHeaders;
+  return truncated;
 }
 
 async function flushToDatabase() {
@@ -114,7 +122,7 @@ async function flushToDatabase() {
             tokens: item.tokens || {},
             // Dollar cost derived from provider-reported credits (only set for credit-billed providers).
             cost: creditsToUsd(item.provider, item.tokens?.credits) || undefined,
-            request: truncateField(item.request, config.maxJsonSize),
+            request: truncateRequest(item.request, config.maxJsonSize),
             providerRequest: truncateField(item.providerRequest, config.maxJsonSize),
             providerResponse: truncateField(item.providerResponse, config.maxJsonSize),
             response: truncateField(item.response, config.maxJsonSize),
