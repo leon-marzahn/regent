@@ -2,17 +2,7 @@ import { saveRequestUsage, appendRequestLog, saveRequestDetail } from "@/lib/usa
 import { COLORS } from "../../utils/stream.js";
 import { traceDetail } from "@/lib/requestTrace.js";
 import { canonicalizeUsage } from "../../utils/usageTracking.js";
-
-const OPTIONAL_PARAMS = [
-  "temperature", "top_p", "top_k",
-  "max_tokens", "max_completion_tokens",
-  "thinking", "reasoning", "enable_thinking",
-  "presence_penalty", "frequency_penalty",
-  "seed", "stop", "tools", "tool_choice",
-  "response_format", "prediction", "store", "metadata",
-  "n", "logprobs", "top_logprobs", "logit_bias",
-  "user", "parallel_tool_calls"
-];
+import { REQUEST_DETAIL_FIELDS } from "../../config/requestDetailConfig.js";
 
 // Router control headers (x-regent-*, plus the legacy x-9router-* names) the client sent.
 export function pickRegentHeaders(headers) {
@@ -23,12 +13,15 @@ export function pickRegentHeaders(headers) {
   return picked;
 }
 
+// The client request as stored for the Usage drawer. `body` is the client's
+// body in its own wire format (Responses `input`, Claude `system`, ...), so
+// the stored fields come from the per-format list in requestDetailConfig.js.
 export function extractRequestConfig(body, stream, regentHeaders) {
-  const config = { messages: body.messages || [], model: body.model, stream };
-  if (regentHeaders && Object.keys(regentHeaders).length) config.regentHeaders = regentHeaders;
-  for (const param of OPTIONAL_PARAMS) {
-    if (body[param] !== undefined) config[param] = body[param];
+  const config = { model: body?.model, stream };
+  for (const field of REQUEST_DETAIL_FIELDS) {
+    if (body?.[field] !== undefined) config[field] = body[field];
   }
+  if (regentHeaders && Object.keys(regentHeaders).length) config.regentHeaders = regentHeaders;
   return config;
 }
 

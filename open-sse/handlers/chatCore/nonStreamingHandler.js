@@ -237,7 +237,7 @@ export function translateNonStreamingResponse(responseBody, targetFormat, source
 /**
  * Handle non-streaming response from provider.
  */
-export async function handleNonStreamingResponse({ traceAttempt, providerResponse, provider, model, sourceFormat, targetFormat, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, trackDone, appendLog, pxpipe, reqTag, log }) {
+export async function handleNonStreamingResponse({ traceAttempt, providerResponse, provider, model, sourceFormat, targetFormat, body, clientBody = body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, trackDone, appendLog, pxpipe, reqTag, log }) {
   trackDone();
   const contentType = providerResponse.headers.get("content-type") || "";
   let responseBody;
@@ -342,7 +342,7 @@ export async function handleNonStreamingResponse({ traceAttempt, providerRespons
     provider, model, connectionId,
     latency: { ttft: totalLatency, total: totalLatency },
     tokens: usage || { prompt_tokens: 0, completion_tokens: 0 },
-    request: extractRequestConfig(body, stream, clientRawRequest?.regentHeaders),
+    request: extractRequestConfig(clientBody, stream, clientRawRequest?.regentHeaders),
     providerRequest: finalBody || translatedBody || null,
     providerResponse: responseBody || null,
     response: {
