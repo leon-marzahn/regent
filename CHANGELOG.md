@@ -1,4 +1,11 @@
 
+# v102.5.0 (2026-11-16)
+
+## Fixes
+- **usage**: Keep regent headers when a logged request is truncated (#169)
+- **usage**: Log the client's actual request content in request details (#170)
+- **openrouter**: Keep cache_control and add per-connection upstream routing (#171)
+
 # v102.4.0 (2026-11-14)
 
 ## Upgrade notes
