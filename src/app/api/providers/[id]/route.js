@@ -6,6 +6,12 @@ import {
   deleteProviderConnection,
 } from "@/models";
 import { normalizeTlsImpersonation } from "open-sse/config/tlsImpersonation.js";
+import {
+  PROVIDER_ROUTING_FIELD,
+  checkProviderRoutingWrite,
+  normalizeProviderRouting,
+  supportsProviderRouting,
+} from "open-sse/config/providerRouting.js";
 import { toProviderConnectionResponse, usesAwsCredentialForm } from "@/lib/providerConnectionResponse";
 import { MaskedUrlError, restoreMaskedUrl, restoreRedacted } from "@/lib/secretRedaction";
 
@@ -113,6 +119,15 @@ export async function PUT(request, { params }) {
     }
 
     const hasTlsField = Object.prototype.hasOwnProperty.call(body, "tlsImpersonation");
+
+    // Upstream routing is the operator's policy, so a write is validated strictly: a typo
+    // gets a 400 instead of being dropped, which could silently loosen or delete the policy.
+    const routingWrite = checkProviderRoutingWrite(existing.provider, body);
+    if (routingWrite.error) {
+      return NextResponse.json({ error: routingWrite.error }, { status: 400 });
+    }
+    const hasRoutingField = Object.prototype.hasOwnProperty.call(body, PROVIDER_ROUTING_FIELD);
+
     const updateData = {};
     if (name !== undefined) updateData.name = name;
     if (priority !== undefined) updateData.priority = priority;
@@ -129,7 +144,7 @@ export async function PUT(request, { params }) {
         existing.providerSpecificData,
         providerSpecificData,
         proxyConfig.hasAnyProxyField,
-        proxyPoolResult.hasProxyPoolField || hasTlsField
+        proxyPoolResult.hasProxyPoolField || hasTlsField || hasRoutingField
       )
     ) {
       // Responses redact secrets, so a form built from one echoes back blanks, has<Field>
@@ -165,6 +180,17 @@ export async function PUT(request, { params }) {
       const tls = normalizeTlsImpersonation(tlsInput);
       if (tls) updateData.providerSpecificData.tlsImpersonation = tls;
       else delete updateData.providerSpecificData.tlsImpersonation;
+
+      // Upstream routing: the validated value when one was sent (null clears it); otherwise
+      // the stored value, re-normalized so nothing unvalidated survives an unrelated edit.
+      // Providers without the quirk never keep one (the executor would ignore it anyway).
+      const routing = !supportsProviderRouting(existing.provider)
+        ? null
+        : routingWrite.supplied
+          ? routingWrite.routing
+          : normalizeProviderRouting(updateData.providerSpecificData[PROVIDER_ROUTING_FIELD]);
+      if (routing) updateData.providerSpecificData[PROVIDER_ROUTING_FIELD] = routing;
+      else delete updateData.providerSpecificData[PROVIDER_ROUTING_FIELD];
 
       if (proxyPoolResult.hasProxyPoolField) {
         if (proxyPoolResult.proxyPoolId === null) {

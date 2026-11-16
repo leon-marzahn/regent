@@ -38,6 +38,15 @@
     "selector": "[role=dialog]"
   },
   {
+    "name": "provider-edit-account-openrouter",
+    "route": "/dashboard/providers/openrouter",
+    "steps": [
+      { "click": "button[aria-label='Edit account']" },
+      { "waitFor": "text=Upstream routing" }
+    ],
+    "selector": "[role=dialog]"
+  },
+  {
     "name": "usage-request-drawer",
     "route": "/dashboard/usage",
     "steps": [

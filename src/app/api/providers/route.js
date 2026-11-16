@@ -11,6 +11,7 @@ import { AI_PROVIDERS, FREE_TIER_PROVIDERS, WEB_COOKIE_PROVIDERS, isOpenAICompat
 import { normalizeProviderId, normalizeProviderSpecificData } from "@/lib/providerNormalization";
 import { toProviderConnectionResponse } from "@/lib/providerConnectionResponse";
 import { isMaskedUrl, MaskedUrlError } from "@/lib/secretRedaction";
+import { PROVIDER_ROUTING_FIELD, checkProviderRoutingWrite } from "open-sse/config/providerRouting.js";
 
 export const dynamic = "force-dynamic";
 
@@ -128,6 +129,13 @@ export async function POST(request) {
       return NextResponse.json({ error: "Name is required" }, { status: 400 });
     }
 
+    // Upstream routing is validated strictly, as on edit: a bad value gets a 400, never a
+    // silently loosened policy.
+    const routingWrite = checkProviderRoutingWrite(provider, body);
+    if (routingWrite.error) {
+      return NextResponse.json({ error: routingWrite.error }, { status: 400 });
+    }
+
     let providerSpecificData = normalizeProviderSpecificData(provider, body, body.providerSpecificData);
 
     // Compatible LLM nodes support multiple API-key connections (key pool); runtime
@@ -176,6 +184,10 @@ export async function POST(request) {
     if (proxyPoolId !== null) {
       mergedProviderSpecificData.proxyPoolId = proxyPoolId;
     }
+
+    // Only the validated routing object is stored, never the raw input.
+    delete mergedProviderSpecificData[PROVIDER_ROUTING_FIELD];
+    if (routingWrite.routing) mergedProviderSpecificData[PROVIDER_ROUTING_FIELD] = routingWrite.routing;
 
     const newConnection = await createProviderConnection({
       provider,
