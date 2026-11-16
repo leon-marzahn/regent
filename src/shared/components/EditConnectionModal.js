@@ -11,6 +11,31 @@ import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider, AI_PROVIDERS
 import Select from "@/shared/components/Select";
 import Toggle from "@/shared/components/Toggle";
 import { TLS_IMPERSONATION_OSES, TLS_IMPERSONATION_PROFILES, normalizeTlsImpersonation } from "open-sse/config/tlsImpersonation.js";
+import { PROVIDER_ROUTING_FIELD, normalizeProviderRouting, parseProviderSlugs } from "open-sse/config/providerRouting.js";
+
+const EMPTY_ROUTING = { only: "", order: "", ignore: "", allowFallbacks: true };
+
+function routingToForm(stored) {
+  const routing = normalizeProviderRouting(stored);
+  if (!routing) return EMPTY_ROUTING;
+  return {
+    only: (routing.only || []).join(", "),
+    order: (routing.order || []).join(", "),
+    ignore: (routing.ignore || []).join(", "),
+    allowFallbacks: routing.allow_fallbacks !== false,
+  };
+}
+
+// Empty lists are left out; allow_fallbacks is only stored when turned off (on is the default).
+function routingFromForm(form) {
+  const routing = {};
+  for (const key of ["only", "order", "ignore"]) {
+    const slugs = parseProviderSlugs(form[key]);
+    if (slugs.length) routing[key] = slugs;
+  }
+  if (!form.allowFallbacks) routing.allow_fallbacks = false;
+  return Object.keys(routing).length ? routing : null;
+}
 
 export default function EditConnectionModal({ isOpen, connection, proxyPools, onSave, onClose }) {
   const [formData, setFormData] = useState({
@@ -34,6 +59,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
   const [validationResult, setValidationResult] = useState(null);
   const [saving, setSaving] = useState(false);
   const [tls, setTls] = useState({ enabled: false, browser: "chrome", os: "macos" });
+  const [routing, setRouting] = useState(EMPTY_ROUTING);
 
   useEffect(() => {
     if (connection) {
@@ -45,6 +71,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
       // Load Azure-specific data if present
       const savedTls = normalizeTlsImpersonation(connection.providerSpecificData?.tlsImpersonation);
       setTls(savedTls ? { enabled: true, ...savedTls } : { enabled: false, browser: "chrome", os: "macos" });
+      setRouting(routingToForm(connection.providerSpecificData?.[PROVIDER_ROUTING_FIELD]));
       if (connection.provider === "azure" && connection.providerSpecificData) {
         setAzureData({
           azureEndpoint: connection.providerSpecificData.azureEndpoint || "",
@@ -85,6 +112,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
     ? (isOpenAICompatibleProvider(connection.provider) || isAnthropicCompatibleProvider(connection.provider))
     : false;
   const providerRegions = connection ? (AI_PROVIDERS?.[connection.provider]?.regions || null) : null;
+  const supportsRouting = !!AI_PROVIDERS?.[connection?.provider]?.providerRouting;
 
   // Build providerSpecificData for region-aware providers
   const buildRegionSpecificData = () => {
@@ -206,6 +234,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
       }
       
       updates.tlsImpersonation = tls.enabled ? { browser: tls.browser, os: tls.os } : null;
+      if (supportsRouting) updates[PROVIDER_ROUTING_FIELD] = routingFromForm(routing);
       await onSave(updates);
     } finally {
       setSaving(false);
@@ -352,6 +381,41 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
             onChange={(e) => setRegion(e.target.value)}
             options={providerRegions.map((r) => ({ value: r.id, label: r.label }))}
           />
+        )}
+
+        {supportsRouting && (
+          <div className="flex flex-col gap-3 rounded-lg border border-border p-4">
+            <div>
+              <p className="text-sm font-medium">Upstream routing</p>
+              <p className="text-xs text-text-muted">
+                Which providers behind this aggregator may serve requests. Use their slugs, comma-separated, e.g. google-vertex/global. Applies to every request on this connection and overrides the same settings sent by a client.
+              </p>
+            </div>
+            <Input
+              label="Only these providers"
+              value={routing.only}
+              onChange={(e) => setRouting({ ...routing, only: e.target.value })}
+              placeholder="google-vertex/global"
+            />
+            <Input
+              label="Preferred order"
+              value={routing.order}
+              onChange={(e) => setRouting({ ...routing, order: e.target.value })}
+              placeholder="anthropic, google-vertex"
+            />
+            <Input
+              label="Never use"
+              value={routing.ignore}
+              onChange={(e) => setRouting({ ...routing, ignore: e.target.value })}
+              placeholder="amazon-bedrock"
+            />
+            <Toggle
+              checked={routing.allowFallbacks}
+              onChange={(allowFallbacks) => setRouting({ ...routing, allowFallbacks })}
+              label="Fall back to other providers"
+              description="When off, a request fails instead of moving to a provider outside the list above."
+            />
+          </div>
         )}
 
         <div className="flex flex-col gap-3 rounded-lg border border-border p-4">

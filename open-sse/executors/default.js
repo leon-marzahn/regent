@@ -9,6 +9,7 @@ import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 import { stripUnsupportedParams } from "../translator/concerns/paramSupport.js";
 import { extractClaudeSessionIdFromUserId } from "../utils/claudeCloaking.js";
+import { PROVIDER_ROUTING_FIELD, applyProviderRouting } from "../config/providerRouting.js";
 
 // Auth header descriptors — derived from registry transport.auth, fallback to hardcoded defaults.
 const BEARER = { combined: true, header: "Authorization", scheme: "bearer" };
@@ -108,6 +109,10 @@ export class DefaultExecutor extends BaseExecutor {
       // quirk: some openai-compatible providers reject Anthropic's client_metadata field
       if (this.config.quirks?.dropClientMetadata) {
         delete transformed.client_metadata;
+      }
+      // quirk: aggregators that route by a body-level `provider` object (OpenRouter)
+      if (this.config.quirks?.providerRouting) {
+        transformed = applyProviderRouting(transformed, credentials?.providerSpecificData?.[PROVIDER_ROUTING_FIELD]);
       }
       stripUnsupportedParams(this.provider, model, transformed);
     }

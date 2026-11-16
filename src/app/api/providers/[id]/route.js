@@ -6,6 +6,7 @@ import {
   deleteProviderConnection,
 } from "@/models";
 import { normalizeTlsImpersonation } from "open-sse/config/tlsImpersonation.js";
+import { PROVIDER_ROUTING_FIELD, normalizeProviderRouting } from "open-sse/config/providerRouting.js";
 import { toProviderConnectionResponse, usesAwsCredentialForm } from "@/lib/providerConnectionResponse";
 import { MaskedUrlError, restoreMaskedUrl, restoreRedacted } from "@/lib/secretRedaction";
 
@@ -113,6 +114,7 @@ export async function PUT(request, { params }) {
     }
 
     const hasTlsField = Object.prototype.hasOwnProperty.call(body, "tlsImpersonation");
+    const hasRoutingField = Object.prototype.hasOwnProperty.call(body, PROVIDER_ROUTING_FIELD);
     const updateData = {};
     if (name !== undefined) updateData.name = name;
     if (priority !== undefined) updateData.priority = priority;
@@ -129,7 +131,7 @@ export async function PUT(request, { params }) {
         existing.providerSpecificData,
         providerSpecificData,
         proxyConfig.hasAnyProxyField,
-        proxyPoolResult.hasProxyPoolField || hasTlsField
+        proxyPoolResult.hasProxyPoolField || hasTlsField || hasRoutingField
       )
     ) {
       // Responses redact secrets, so a form built from one echoes back blanks, has<Field>
@@ -165,6 +167,14 @@ export async function PUT(request, { params }) {
       const tls = normalizeTlsImpersonation(tlsInput);
       if (tls) updateData.providerSpecificData.tlsImpersonation = tls;
       else delete updateData.providerSpecificData.tlsImpersonation;
+
+      // Same for upstream routing: only validated slugs reach the request body.
+      const routingInput = hasRoutingField
+        ? body[PROVIDER_ROUTING_FIELD]
+        : updateData.providerSpecificData[PROVIDER_ROUTING_FIELD];
+      const routing = normalizeProviderRouting(routingInput);
+      if (routing) updateData.providerSpecificData[PROVIDER_ROUTING_FIELD] = routing;
+      else delete updateData.providerSpecificData[PROVIDER_ROUTING_FIELD];
 
       if (proxyPoolResult.hasProxyPoolField) {
         if (proxyPoolResult.proxyPoolId === null) {
