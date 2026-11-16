@@ -6,7 +6,12 @@ import {
   deleteProviderConnection,
 } from "@/models";
 import { normalizeTlsImpersonation } from "open-sse/config/tlsImpersonation.js";
-import { PROVIDER_ROUTING_FIELD, normalizeProviderRouting } from "open-sse/config/providerRouting.js";
+import {
+  PROVIDER_ROUTING_FIELD,
+  normalizeProviderRouting,
+  validateProviderRouting,
+} from "open-sse/config/providerRouting.js";
+import { PROVIDERS } from "open-sse/config/providers.js";
 import { toProviderConnectionResponse, usesAwsCredentialForm } from "@/lib/providerConnectionResponse";
 import { MaskedUrlError, restoreMaskedUrl, restoreRedacted } from "@/lib/secretRedaction";
 
@@ -114,7 +119,27 @@ export async function PUT(request, { params }) {
     }
 
     const hasTlsField = Object.prototype.hasOwnProperty.call(body, "tlsImpersonation");
+
+    // Upstream routing is the operator's policy, so a write is validated strictly: a typo
+    // gets a 400 instead of being dropped, which could silently loosen or delete the policy.
     const hasRoutingField = Object.prototype.hasOwnProperty.call(body, PROVIDER_ROUTING_FIELD);
+    const routingInPsd =
+      !!providerSpecificData && typeof providerSpecificData === "object" &&
+      Object.prototype.hasOwnProperty.call(providerSpecificData, PROVIDER_ROUTING_FIELD);
+    const routingSupplied = hasRoutingField || routingInPsd;
+    let validatedRouting = null;
+    if (routingSupplied) {
+      const routingInput = hasRoutingField ? body[PROVIDER_ROUTING_FIELD] : providerSpecificData[PROVIDER_ROUTING_FIELD];
+      const { routing, errors } = validateProviderRouting(routingInput);
+      if (routing && !PROVIDERS[existing.provider]?.quirks?.providerRouting) {
+        return NextResponse.json({ error: "This provider does not support upstream routing." }, { status: 400 });
+      }
+      if (errors.length) {
+        return NextResponse.json({ error: errors.join(" ") }, { status: 400 });
+      }
+      validatedRouting = routing;
+    }
+
     const updateData = {};
     if (name !== undefined) updateData.name = name;
     if (priority !== undefined) updateData.priority = priority;
@@ -168,11 +193,14 @@ export async function PUT(request, { params }) {
       if (tls) updateData.providerSpecificData.tlsImpersonation = tls;
       else delete updateData.providerSpecificData.tlsImpersonation;
 
-      // Same for upstream routing: only validated slugs reach the request body.
-      const routingInput = hasRoutingField
-        ? body[PROVIDER_ROUTING_FIELD]
-        : updateData.providerSpecificData[PROVIDER_ROUTING_FIELD];
-      const routing = normalizeProviderRouting(routingInput);
+      // Upstream routing: the validated value when one was sent (null clears it); otherwise
+      // the stored value, re-normalized so nothing unvalidated survives an unrelated edit.
+      // Providers without the quirk never keep one (the executor would ignore it anyway).
+      const routing = !PROVIDERS[existing.provider]?.quirks?.providerRouting
+        ? null
+        : routingSupplied
+          ? validatedRouting
+          : normalizeProviderRouting(updateData.providerSpecificData[PROVIDER_ROUTING_FIELD]);
       if (routing) updateData.providerSpecificData[PROVIDER_ROUTING_FIELD] = routing;
       else delete updateData.providerSpecificData[PROVIDER_ROUTING_FIELD];
 

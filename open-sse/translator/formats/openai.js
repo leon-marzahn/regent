@@ -4,9 +4,33 @@ import { ROLE, OPENAI_BLOCK, CLAUDE_BLOCK, VALID_OPENAI_CONTENT_TYPES, VALID_OPE
 // Re-export valid-type lists (moved to schema/blocks.js) to keep existing importers working.
 export { VALID_OPENAI_CONTENT_TYPES, VALID_OPENAI_MESSAGE_TYPES };
 
+// Anthropic-backed upstreams (OpenRouter → Anthropic/Vertex/Bedrock) reject a request
+// with more than 4 cache_control markers.
+const MAX_CACHE_CONTROL_MARKERS = 4;
+
+// Trim kept markers to the budget: the last marked system part is held (the stable
+// prefix that makes caching worth it), the remaining slots go to the tail-most markers.
+function capCacheControlParts(messages) {
+  const marked = [];
+  let head = null;
+  for (const msg of messages) {
+    if (!Array.isArray(msg?.content)) continue;
+    for (const part of msg.content) {
+      if (!part?.cache_control) continue;
+      marked.push(part);
+      if (msg.role === ROLE.SYSTEM) head = part;
+    }
+  }
+  if (marked.length <= MAX_CACHE_CONTROL_MARKERS) return;
+  const rest = marked.filter((p) => p !== head);
+  const keep = MAX_CACHE_CONTROL_MARKERS - (head ? 1 : 0);
+  for (const part of rest.slice(0, rest.length - keep)) delete part.cache_control;
+}
+
 // Filter messages to OpenAI standard format
 // Remove: thinking, redacted_thinking, signature, and other non-OpenAI blocks
-// opts.preserveCacheControl: keep cache_control on content blocks (e.g. for DashScope/alicode)
+// opts.preserveCacheControl: keep cache_control on content blocks (e.g. for DashScope/alicode),
+// capped at MAX_CACHE_CONTROL_MARKERS
 export function filterToOpenAIFormat(body, opts = {}) {
   if (!body.messages || !Array.isArray(body.messages)) return body;
   const keepCache = !!opts.preserveCacheControl;
@@ -76,6 +100,8 @@ export function filterToOpenAIFormat(body, opts = {}) {
     }
     return true;
   });
+
+  if (keepCache) capCacheControlParts(body.messages);
 
   // Remove empty tools array (some providers like QWEN reject it)
   if (body.tools && Array.isArray(body.tools) && body.tools.length === 0) {

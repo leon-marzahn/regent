@@ -11,9 +11,25 @@ import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider, AI_PROVIDERS
 import Select from "@/shared/components/Select";
 import Toggle from "@/shared/components/Toggle";
 import { TLS_IMPERSONATION_OSES, TLS_IMPERSONATION_PROFILES, normalizeTlsImpersonation } from "open-sse/config/tlsImpersonation.js";
-import { PROVIDER_ROUTING_FIELD, normalizeProviderRouting, parseProviderSlugs } from "open-sse/config/providerRouting.js";
+import {
+  PROVIDER_ROUTING_FIELD,
+  PROVIDER_ROUTING_LIST_KEYS,
+  PROVIDER_ROUTING_MAX_SLUGS,
+  checkProviderSlugs,
+  normalizeProviderRouting,
+  parseProviderSlugs,
+} from "open-sse/config/providerRouting.js";
 
 const EMPTY_ROUTING = { only: "", order: "", ignore: "", allowFallbacks: true };
+
+// Per-field error text, or undefined. Invalid entries block saving rather than being
+// dropped, so a typo can't quietly remove a restriction.
+function routingFieldError(value) {
+  const { slugs, rejected } = checkProviderSlugs(value);
+  if (rejected.length) return `Not a provider slug: ${rejected.join(", ")}`;
+  if (slugs.length > PROVIDER_ROUTING_MAX_SLUGS) return `At most ${PROVIDER_ROUTING_MAX_SLUGS} providers`;
+  return undefined;
+}
 
 function routingToForm(stored) {
   const routing = normalizeProviderRouting(stored);
@@ -29,7 +45,7 @@ function routingToForm(stored) {
 // Empty lists are left out; allow_fallbacks is only stored when turned off (on is the default).
 function routingFromForm(form) {
   const routing = {};
-  for (const key of ["only", "order", "ignore"]) {
+  for (const key of PROVIDER_ROUTING_LIST_KEYS) {
     const slugs = parseProviderSlugs(form[key]);
     if (slugs.length) routing[key] = slugs;
   }
@@ -113,6 +129,10 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
     : false;
   const providerRegions = connection ? (AI_PROVIDERS?.[connection.provider]?.regions || null) : null;
   const supportsRouting = !!AI_PROVIDERS?.[connection?.provider]?.providerRouting;
+  const routingErrors = supportsRouting
+    ? Object.fromEntries(PROVIDER_ROUTING_LIST_KEYS.map((key) => [key, routingFieldError(routing[key])]))
+    : {};
+  const hasRoutingError = Object.values(routingErrors).some(Boolean);
 
   // Build providerSpecificData for region-aware providers
   const buildRegionSpecificData = () => {
@@ -171,7 +191,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
   };
 
   const handleSubmit = async () => {
-    if (!connection) return;
+    if (!connection || hasRoutingError) return;
     setSaving(true);
     try {
       const updates = {
@@ -388,7 +408,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
             <div>
               <p className="text-sm font-medium">Upstream routing</p>
               <p className="text-xs text-text-muted">
-                Which providers behind this aggregator may serve requests. Use their slugs, comma-separated, e.g. google-vertex/global. Applies to every request on this connection and overrides the same settings sent by a client.
+                Which providers behind this aggregator may serve chat requests. Use their slugs, comma-separated, e.g. google-vertex/global. Applies to every chat request on this connection and overrides the same settings sent by a client.
               </p>
             </div>
             <Input
@@ -396,18 +416,21 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
               value={routing.only}
               onChange={(e) => setRouting({ ...routing, only: e.target.value })}
               placeholder="google-vertex/global"
+              error={routingErrors.only}
             />
             <Input
               label="Preferred order"
               value={routing.order}
               onChange={(e) => setRouting({ ...routing, order: e.target.value })}
               placeholder="anthropic, google-vertex"
+              error={routingErrors.order}
             />
             <Input
               label="Never use"
               value={routing.ignore}
               onChange={(e) => setRouting({ ...routing, ignore: e.target.value })}
               placeholder="amazon-bedrock"
+              error={routingErrors.ignore}
             />
             <Toggle
               checked={routing.allowFallbacks}
@@ -458,7 +481,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
 
         <div className="mt-2 flex justify-end gap-2">
           <Button onClick={onClose} variant="secondary">Cancel</Button>
-          <Button onClick={handleSubmit} disabled={saving}>{saving ? "Saving..." : "Save"}</Button>
+          <Button onClick={handleSubmit} disabled={saving || hasRoutingError}>{saving ? "Saving..." : "Save"}</Button>
         </div>
       </div>
     </Dialog>

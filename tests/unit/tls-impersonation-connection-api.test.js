@@ -142,11 +142,47 @@ describe("per-connection upstream routing setting", () => {
     expect((await put(id, { providerRouting: null })).providerRouting).toBeUndefined();
   });
 
-  it("sanitizes values sent top-level or through providerSpecificData", async () => {
+  async function putStatus(id, body) {
+    const res = await updateConnection(request("PUT", `https://regent.local/api/providers/${id}`, body), {
+      params: Promise.resolve({ id }),
+    });
+    return { status: res.status, body: await res.json() };
+  }
+
+  it("lowercases and deduplicates valid slugs", async () => {
     const id = await createOpenRouter();
-    expect((await put(id, { providerRouting: { only: ["Anthropic", "bad slug"], extra: 1 } })).providerRouting)
-      .toEqual({ only: ["anthropic"] });
-    const psd = await put(id, { providerSpecificData: { providerRouting: { order: ["x/y/z"], allow_fallbacks: "no" } } });
-    expect(psd.providerRouting).toBeUndefined();
+    expect((await put(id, { providerRouting: { only: ["Anthropic", "anthropic", "Google-Vertex/Global"] } })).providerRouting)
+      .toEqual({ only: ["anthropic", "google-vertex/global"] });
+  });
+
+  it("rejects invalid input with a 400 and keeps the stored policy", async () => {
+    const id = await createOpenRouter();
+    const policy = { only: ["google-vertex/global"], allow_fallbacks: false };
+    await put(id, { providerRouting: policy });
+    const hostile = [
+      { providerRouting: "anthropic, google-vertex" },
+      { providerRouting: { only: ["google-vertex/global", "bad slug"] } },
+      { providerRouting: { only: ["google-vertex/global/x"] } },
+      { providerRouting: { only: ["anthropic"], allow_fallbacks: "false" } },
+      { providerRouting: { only: ["anthropic"], sort: "price" } },
+      { providerRouting: { ignore: Array.from({ length: 33 }, (_, i) => `p${i}`) } },
+      { providerSpecificData: { providerRouting: { order: ["x/y/z"] } } },
+    ];
+    for (const body of hostile) {
+      const res = await putStatus(id, body);
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      expect(res.body.error).toBeTruthy();
+    }
+    expect((await getStoredConnection(id)).providerSpecificData.providerRouting).toEqual(policy);
+  });
+
+  it("refuses routing for providers without the quirk and never keeps one there", async () => {
+    const created = await createConnection(
+      request("POST", "https://regent.local/api/providers", { provider: "openai", name: "no routing", apiKey: "sk-test" }),
+    );
+    const id = (await created.json()).connection.id;
+    const res = await putStatus(id, { providerRouting: { only: ["anthropic"] } });
+    expect(res.status).toBe(400);
+    expect((await put(id, { providerRouting: null })).providerRouting).toBeUndefined();
   });
 });

@@ -5,7 +5,9 @@ import {
   applyProviderRouting,
   normalizeProviderRouting,
   parseProviderSlugs,
+  validateProviderRouting,
 } from "../../open-sse/config/providerRouting.js";
+import { filterToOpenAIFormat } from "../../open-sse/translator/formats/openai.js";
 import { DefaultExecutor } from "../../open-sse/executors/default.js";
 import { translateRequest } from "../../open-sse/translator/index.js";
 import { AI_PROVIDERS } from "../../src/shared/constants/providers.js";
@@ -57,6 +59,53 @@ describe("OpenRouter keeps cache_control markers", () => {
   it("still strips them for providers without the quirk", () => {
     const out = translateRequest("claude", "openai", "llama-3.3-70b", claudeBody(), true, null, "groq");
     expect(cacheMarkers(out)).toBe(0);
+  });
+
+  it("caps kept markers at 4, holding the system marker and the newest ones", () => {
+    const part = (text) => ({ type: "text", text, cache_control: ephemeral });
+    const body = {
+      messages: [
+        { role: "system", content: [part("system")] },
+        ...["u1", "u2", "u3", "u4", "u5"].map((t) => ({ role: "user", content: [part(t)] })),
+      ],
+    };
+    filterToOpenAIFormat(body, { preserveCacheControl: true });
+    const kept = body.messages.filter((m) => m.content[0].cache_control).map((m) => m.content[0].text);
+    expect(kept).toEqual(["system", "u3", "u4", "u5"]);
+  });
+
+  it("leaves 4 or fewer markers alone", () => {
+    const body = { messages: [{ role: "user", content: [{ type: "text", text: "a", cache_control: ephemeral }] }] };
+    filterToOpenAIFormat(body, { preserveCacheControl: true });
+    expect(body.messages[0].content[0].cache_control).toEqual(ephemeral);
+  });
+});
+
+describe("validateProviderRouting (writes)", () => {
+  it("accepts valid input and normalizes it", () => {
+    expect(validateProviderRouting({ only: "Google-Vertex/Global, anthropic", allow_fallbacks: false })).toEqual({
+      routing: { only: ["google-vertex/global", "anthropic"], allow_fallbacks: false },
+      errors: [],
+    });
+    expect(validateProviderRouting(null)).toEqual({ routing: null, errors: [] });
+    expect(validateProviderRouting({ only: [], allow_fallbacks: null })).toEqual({ routing: null, errors: [] });
+  });
+
+  it("reports every problem instead of dropping it", () => {
+    const cases = [
+      ["anthropic", /must be an object/],
+      [["anthropic"], /must be an object/],
+      [{ only: ["google vertex"] }, /invalid provider slugs: google vertex/],
+      [{ only: "google-vertex/global/x" }, /invalid provider slugs/],
+      [{ order: 42 }, /invalid provider slugs: 42/],
+      [{ only: ["anthropic"], allow_fallbacks: "false" }, /must be true or false/],
+      [{ sort: "price" }, /Unknown routing field "sort"/],
+      [{ ignore: Array.from({ length: 33 }, (_, i) => `p${i}`) }, /limit is 32/],
+    ];
+    for (const [value, message] of cases) {
+      const { errors } = validateProviderRouting(value);
+      expect(errors.join(" "), JSON.stringify(value)).toMatch(message);
+    }
   });
 });
 
