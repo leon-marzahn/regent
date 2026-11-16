@@ -8,10 +8,10 @@ import {
 import { normalizeTlsImpersonation } from "open-sse/config/tlsImpersonation.js";
 import {
   PROVIDER_ROUTING_FIELD,
+  checkProviderRoutingWrite,
   normalizeProviderRouting,
-  validateProviderRouting,
+  supportsProviderRouting,
 } from "open-sse/config/providerRouting.js";
-import { PROVIDERS } from "open-sse/config/providers.js";
 import { toProviderConnectionResponse, usesAwsCredentialForm } from "@/lib/providerConnectionResponse";
 import { MaskedUrlError, restoreMaskedUrl, restoreRedacted } from "@/lib/secretRedaction";
 
@@ -122,23 +122,11 @@ export async function PUT(request, { params }) {
 
     // Upstream routing is the operator's policy, so a write is validated strictly: a typo
     // gets a 400 instead of being dropped, which could silently loosen or delete the policy.
-    const hasRoutingField = Object.prototype.hasOwnProperty.call(body, PROVIDER_ROUTING_FIELD);
-    const routingInPsd =
-      !!providerSpecificData && typeof providerSpecificData === "object" &&
-      Object.prototype.hasOwnProperty.call(providerSpecificData, PROVIDER_ROUTING_FIELD);
-    const routingSupplied = hasRoutingField || routingInPsd;
-    let validatedRouting = null;
-    if (routingSupplied) {
-      const routingInput = hasRoutingField ? body[PROVIDER_ROUTING_FIELD] : providerSpecificData[PROVIDER_ROUTING_FIELD];
-      const { routing, errors } = validateProviderRouting(routingInput);
-      if (routing && !PROVIDERS[existing.provider]?.quirks?.providerRouting) {
-        return NextResponse.json({ error: "This provider does not support upstream routing." }, { status: 400 });
-      }
-      if (errors.length) {
-        return NextResponse.json({ error: errors.join(" ") }, { status: 400 });
-      }
-      validatedRouting = routing;
+    const routingWrite = checkProviderRoutingWrite(existing.provider, body);
+    if (routingWrite.error) {
+      return NextResponse.json({ error: routingWrite.error }, { status: 400 });
     }
+    const hasRoutingField = Object.prototype.hasOwnProperty.call(body, PROVIDER_ROUTING_FIELD);
 
     const updateData = {};
     if (name !== undefined) updateData.name = name;
@@ -196,10 +184,10 @@ export async function PUT(request, { params }) {
       // Upstream routing: the validated value when one was sent (null clears it); otherwise
       // the stored value, re-normalized so nothing unvalidated survives an unrelated edit.
       // Providers without the quirk never keep one (the executor would ignore it anyway).
-      const routing = !PROVIDERS[existing.provider]?.quirks?.providerRouting
+      const routing = !supportsProviderRouting(existing.provider)
         ? null
-        : routingSupplied
-          ? validatedRouting
+        : routingWrite.supplied
+          ? routingWrite.routing
           : normalizeProviderRouting(updateData.providerSpecificData[PROVIDER_ROUTING_FIELD]);
       if (routing) updateData.providerSpecificData[PROVIDER_ROUTING_FIELD] = routing;
       else delete updateData.providerSpecificData[PROVIDER_ROUTING_FIELD];

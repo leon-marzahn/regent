@@ -14,6 +14,8 @@ export const PROVIDER_ROUTING_BODY_FIELD = "provider";
 export const PROVIDER_ROUTING_LIST_KEYS = ["only", "order", "ignore"];
 export const PROVIDER_ROUTING_MAX_SLUGS = 32;
 
+import { PROVIDERS } from "./providers.js";
+
 // Upstream slugs as the aggregator lists them: "anthropic", "google-vertex/global",
 // "amazon-bedrock/us-east-1", "deepinfra/fp8".
 const SLUG = /^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9._-]+)?$/;
@@ -78,6 +80,29 @@ export function validateProviderRouting(value) {
     else errors.push('"allow_fallbacks" must be true or false.');
   }
   return { routing: Object.keys(routing).length ? routing : null, errors };
+}
+
+export function supportsProviderRouting(provider) {
+  return !!PROVIDERS[provider]?.quirks?.providerRouting;
+}
+
+/**
+ * The one write-path check, shared by every route that stores a connection.
+ * `body` is the request body; routing may come top-level or inside providerSpecificData
+ * (top-level wins). Returns { supplied, routing, error }: when error is set the caller
+ * answers 400 and stores nothing; otherwise it stores `routing` (null = none) if supplied.
+ */
+export function checkProviderRoutingWrite(provider, body) {
+  const psd = body?.providerSpecificData;
+  const topLevel = !!body && Object.prototype.hasOwnProperty.call(body, PROVIDER_ROUTING_FIELD);
+  const nested = !!psd && typeof psd === "object" && Object.prototype.hasOwnProperty.call(psd, PROVIDER_ROUTING_FIELD);
+  if (!topLevel && !nested) return { supplied: false, routing: null, error: null };
+  const { routing, errors } = validateProviderRouting(topLevel ? body[PROVIDER_ROUTING_FIELD] : psd[PROVIDER_ROUTING_FIELD]);
+  if (routing && !supportsProviderRouting(provider)) {
+    return { supplied: true, routing: null, error: "This provider does not support upstream routing." };
+  }
+  if (errors.length) return { supplied: true, routing: null, error: errors.join(" ") };
+  return { supplied: true, routing, error: null };
 }
 
 /** Validated { only?, order?, ignore?, allow_fallbacks? }, or null when nothing is usable. Read path. */

@@ -176,6 +176,36 @@ describe("per-connection upstream routing setting", () => {
     expect((await getStoredConnection(id)).providerSpecificData.providerRouting).toEqual(policy);
   });
 
+  it("validates routing on create too: stores the validated value, refuses bad input", async () => {
+    const create = async (provider, extra) => {
+      const res = await createConnection(
+        request("POST", "https://regent.local/api/providers", { provider, name: `c-${Math.random()}`, apiKey: "sk-test", ...extra }),
+      );
+      return { status: res.status, body: await res.json() };
+    };
+
+    const ok = await create("openrouter", { providerRouting: { only: ["Google-Vertex/Global"], allow_fallbacks: false } });
+    expect(ok.status).toBe(201);
+    expect((await getStoredConnection(ok.body.connection.id)).providerSpecificData.providerRouting)
+      .toEqual({ only: ["google-vertex/global"], allow_fallbacks: false });
+
+    const nested = await create("openrouter", { providerSpecificData: { providerRouting: { order: "anthropic" } } });
+    expect(nested.status).toBe(201);
+    expect((await getStoredConnection(nested.body.connection.id)).providerSpecificData.providerRouting)
+      .toEqual({ order: ["anthropic"] });
+
+    const bad = [
+      ["openrouter", { providerSpecificData: { providerRouting: { only: ["bad slug", "x/y/z"], allow_fallbacks: "false", sort: "price" } } }],
+      ["openrouter", { providerRouting: "anthropic" }],
+      ["groq", { providerSpecificData: { providerRouting: { only: ["anthropic"] } } }],
+    ];
+    for (const [provider, extra] of bad) {
+      const res = await create(provider, extra);
+      expect(res.status, JSON.stringify(extra)).toBe(400);
+      expect(res.body.error).toBeTruthy();
+    }
+  });
+
   it("refuses routing for providers without the quirk and never keeps one there", async () => {
     const created = await createConnection(
       request("POST", "https://regent.local/api/providers", { provider: "openai", name: "no routing", apiKey: "sk-test" }),
