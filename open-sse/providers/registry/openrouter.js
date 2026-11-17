@@ -27,7 +27,9 @@ export default {
     // preserveCacheControl: OpenRouter forwards cache_control to Anthropic/Vertex/Bedrock
     // (prompt caching) and ignores it for models that cannot cache.
     // providerRouting: per-connection `provider` object (only/order/ignore/allow_fallbacks).
-    quirks: { preserveCacheControl: true, providerRouting: true },
+    // autoCacheBreakpoints: Anthropic models cache only up to explicit breakpoints, so a
+    // client that sends none (most OpenAI-format clients) gets them added.
+    quirks: { preserveCacheControl: true, providerRouting: true, autoCacheBreakpoints: ["anthropic/"] },
   },
   models: [
     { id: "openai/text-embedding-3-large", name: "OpenAI Text Embedding 3 Large", kind: "embedding" },

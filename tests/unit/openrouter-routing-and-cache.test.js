@@ -7,7 +7,7 @@ import {
   parseProviderSlugs,
   validateProviderRouting,
 } from "../../open-sse/config/providerRouting.js";
-import { filterToOpenAIFormat } from "../../open-sse/translator/formats/openai.js";
+import { anchorOpenAICache, filterToOpenAIFormat } from "../../open-sse/translator/formats/openai.js";
 import { DefaultExecutor } from "../../open-sse/executors/default.js";
 import { translateRequest } from "../../open-sse/translator/index.js";
 import { AI_PROVIDERS } from "../../src/shared/constants/providers.js";
@@ -78,6 +78,68 @@ describe("OpenRouter keeps cache_control markers", () => {
     const body = { messages: [{ role: "user", content: [{ type: "text", text: "a", cache_control: ephemeral }] }] };
     filterToOpenAIFormat(body, { preserveCacheControl: true });
     expect(body.messages[0].content[0].cache_control).toEqual(ephemeral);
+  });
+});
+
+describe("OpenRouter adds cache breakpoints for Anthropic models when the client sends none", () => {
+  const executor = new DefaultExecutor("openrouter");
+  const send = (model, body) => executor.transformRequest(model, body, true, { apiKey: "sk-test" });
+  const markedText = (body) => body.messages.flatMap((m) =>
+    Array.isArray(m.content) ? m.content.filter((p) => p.cache_control).map((p) => `${m.role}:${p.text ?? p.type}`) : []);
+
+  it("marks the system prompt and the tail of a tool loop", () => {
+    const body = {
+      model: "anthropic/claude-opus-5.5",
+      messages: [
+        { role: "system", content: "stable rules" },
+        { role: "user", content: "list /a" },
+        { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "ls", arguments: "{}" } }] },
+        { role: "tool", tool_call_id: "c1", content: "a.txt" },
+      ],
+    };
+    const out = send("anthropic/claude-opus-5.5", body);
+    expect(markedText(out)).toEqual(["system:stable rules", "tool:a.txt"]);
+    expect(out.messages[0].content[0].cache_control).toEqual({ type: "ephemeral" });
+    expect(body.messages[0].content).toBe("stable rules");
+  });
+
+  it("skips a trailing turn that cannot carry a marker and uses the last part of array content", () => {
+    const out = send("anthropic/claude-opus-5.5", {
+      messages: [
+        { role: "developer", content: [{ type: "text", text: "rules" }, { type: "text", text: "more rules" }] },
+        { role: "user", content: [{ type: "text", text: "look" }, { type: "image_url", image_url: { url: "data:x" } }] },
+        { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "f", arguments: "{}" } }] },
+      ],
+    });
+    expect(markedText(out)).toEqual(["developer:more rules", "user:image_url"]);
+  });
+
+  it("covers Claude clients using top-level cache_control and the Responses API", () => {
+    const claude = translateRequest("claude", "openai", "anthropic/claude-opus-5.5",
+      { model: "x", max_tokens: 10, cache_control: { type: "ephemeral" }, system: "rules", messages: [{ role: "user", content: "hi" }] },
+      true, null, "openrouter");
+    expect(markedText(send("anthropic/claude-opus-5.5", claude))).toEqual(["system:rules", "user:hi"]);
+
+    const responses = translateRequest("openai-responses", "openai", "anthropic/claude-opus-5.5",
+      { model: "x", instructions: "rules", input: "hi" }, true, null, "openrouter");
+    expect(markedText(send("anthropic/claude-opus-5.5", responses)).length).toBe(2);
+  });
+
+  it("leaves the client's own markers alone", () => {
+    const out = send("anthropic/claude-opus-5.5", translateRequest("claude", "openai", "anthropic/claude-opus-5.5", claudeBody(), true, null, "openrouter"));
+    expect(markedText(out)).toEqual(["system:stable system prompt", "user:earlier turn"]);
+  });
+
+  it("does nothing for other models or providers", () => {
+    const body = () => ({ messages: [{ role: "system", content: "rules" }, { role: "user", content: "hi" }] });
+    expect(markedText(send("openai/gpt-5", body()))).toEqual([]);
+    expect(markedText(new DefaultExecutor("groq").transformRequest("anthropic/claude-opus-5.5", body(), true, { apiKey: "k" }))).toEqual([]);
+  });
+
+  it("handles bodies with nothing to mark", () => {
+    expect(anchorOpenAICache({ messages: [] })).toEqual({ messages: [] });
+    expect(anchorOpenAICache({})).toEqual({});
+    expect(markedText(anchorOpenAICache({ messages: [{ role: "user", content: "" }, { role: "system", content: "" }] }))).toEqual([]);
   });
 });
 
