@@ -15,6 +15,52 @@ it("advertises a Claude Code version accepted by Fable 5.1", () => {
   expect(body.system[0].text).toMatch(/^x-anthropic-billing-header: cc_version=2.1.322\./);
 });
 
+describe("applyCloaking session_id", () => {
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  const sessionOf = (sid) => JSON.parse(applyCloaking({ messages: [] }, "sk-ant-oat-test", sid).metadata.user_id).session_id;
+
+  it("sends a plain UUID like Claude Code, not the uuid+timestamp fallback id", () => {
+    const fallback = "f7766433-45e4-406c-87ca-495297f0fc351794933498105";
+    expect(sessionOf(fallback)).toMatch(UUID_RE);
+  });
+
+  it("maps a non-UUID id to the same UUID every time, so the session stays stable", () => {
+    expect(sessionOf("ses_abc123")).toMatch(UUID_RE);
+    expect(sessionOf("ses_abc123")).toBe(sessionOf("ses_abc123"));
+    expect(sessionOf("ses_abc123")).not.toBe(sessionOf("ses_other"));
+  });
+
+  it("keeps a client UUID as-is (lowercased)", () => {
+    expect(sessionOf("9E8F7B8F-0939-4B0B-A2CF-059F387C7334")).toBe("9e8f7b8f-0939-4b0b-a2cf-059f387c7334");
+    expect(sessionOf("claude:9e8f7b8f-0939-4b0b-a2cf-059f387c7334")).toBe("9e8f7b8f-0939-4b0b-a2cf-059f387c7334");
+  });
+
+  it("generates a UUID when there is no session id", () => {
+    expect(sessionOf(undefined)).toMatch(UUID_RE);
+  });
+
+  it("leaves a client's Claude Code user_id with a UUID session untouched", () => {
+    const userId = '{"device_id":"d","account_uuid":"a","session_id":"9e8f7b8f-0939-4b0b-a2cf-059f387c7334"}';
+    const body = applyCloaking({ messages: [], metadata: { user_id: userId } }, "sk-ant-oat-test", "x");
+    expect(body.metadata.user_id).toBe(userId);
+  });
+
+  it("maps only the session_id of a client's JSON user_id when it isn't a UUID", () => {
+    const userId = '{"device_id":"d","account_uuid":"a","session_id":"sess-abc"}';
+    const body = applyCloaking({ messages: [], metadata: { user_id: userId } }, "sk-ant-oat-test", "x");
+    const parsed = JSON.parse(body.metadata.user_id);
+    expect(parsed).toMatchObject({ device_id: "d", account_uuid: "a" });
+    expect(parsed.session_id).toMatch(UUID_RE);
+    expect(parsed.session_id).toBe(sessionOf("sess-abc"));
+  });
+
+  it("passes a non-JSON (legacy) client user_id through unchanged", () => {
+    const userId = "user_abc_account_x_session_9e8f7b8f-0939-4b0b-a2cf-059f387c7334";
+    const body = applyCloaking({ messages: [], metadata: { user_id: userId } }, "sk-ant-oat-test", "x");
+    expect(body.metadata.user_id).toBe(userId);
+  });
+});
+
 describe("cloakClaudeTools", () => {
   const baseBody = {
     tools: [{ name: "todo_write", description: "write todos", input_schema: { type: "object", properties: {} } }],
