@@ -48,6 +48,24 @@ export async function verifyDashboardAuthToken(token) {
   }
 }
 
+// True when the request carries a valid dashboard session cookie. Reads the Cookie
+// header directly so it works on a plain Request as well as a NextRequest.
+// A CLI token or requireLogin=false does not count: this is a signed-in user.
+export async function hasDashboardSession(request) {
+  let token = request?.cookies?.get?.("auth_token")?.value;
+  if (!token) {
+    const header = request?.headers?.get?.("cookie") || "";
+    for (const part of header.split(";")) {
+      const i = part.indexOf("=");
+      if (i > 0 && part.slice(0, i).trim() === "auth_token") {
+        try { token = decodeURIComponent(part.slice(i + 1).trim()); } catch { return false; }
+        break;
+      }
+    }
+  }
+  return verifyDashboardAuthToken(token);
+}
+
 export async function getDashboardAuthSession(token) {
   if (!token) return null;
   try {

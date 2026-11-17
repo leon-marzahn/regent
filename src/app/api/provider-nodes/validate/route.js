@@ -1,16 +1,31 @@
 import { NextResponse } from "next/server";
-import { assertPublicUrl } from "@/shared/utils/ssrfGuard.js";
+import { assertPublicUrlResolved, fetchPublic } from "@/shared/utils/ssrfGuard.js";
 import { isLocalRequest } from "@/dashboardGuard";
+import { hasDashboardSession } from "@/lib/auth/dashboardSession";
 
-// Fetch with timeout wrapper
-const fetchWithTimeout = (url, options, timeout = 10000) => {
+// Fetch with timeout wrapper. `guard` is the SSRF policy for this caller: null (local
+// host, fetch anything) or the options fetchPublic re-checks on every redirect hop.
+const fetchWithTimeout = (url, options, guard, timeout = 10000) => {
   return Promise.race([
-    fetch(url, options),
-    new Promise((_, reject) => 
+    guard ? fetchPublic(url, options, guard) : fetch(url, options),
+    new Promise((_, reject) =>
       setTimeout(() => reject(new Error("Request timeout")), timeout)
     )
   ]);
 };
+
+// Remote callers get the SSRF guard. A signed-in dashboard session may also reach
+// LAN and Tailscale hosts (a self-hosted LM Studio / vLLM behind a reverse proxy); it can
+// already create such a node and send it traffic, so this only lets it test one first.
+// Loopback, link-local and cloud metadata stay blocked for everyone remote.
+async function ssrfGuardFor(request) {
+  if (isLocalRequest(request)) return null;
+  return { allowPrivateNetwork: await hasDashboardSession(request) };
+}
+
+// fetchPublic's refusals. An unresolvable name is reported as the DNS failure it is.
+const isBlockedUrlError = (error) =>
+  error?.message?.startsWith("Blocked URL") && !error.message.includes("does not resolve");
 
 // Validate URL format
 const isValidUrl = (url) => {
@@ -25,7 +40,7 @@ const isValidUrl = (url) => {
 // Parse error details for user-friendly messages
 const getErrorMessage = (error) => {
   if (error.cause?.code === "ECONNREFUSED") return "Connection refused - provider node offline or unreachable";
-  if (error.cause?.code === "ENOTFOUND") return "DNS lookup failed - invalid domain or network issue";
+  if (error.cause?.code === "ENOTFOUND" || error.message?.includes("does not resolve")) return "DNS lookup failed - invalid domain or network issue";
   if (error.cause?.code === "ETIMEDOUT") return "Connection timeout - provider node too slow";
   if (error.message.includes("timeout")) return "Request timeout (>10s) - provider node not responding";
   if (error.cause?.code === "CERT_HAS_EXPIRED") return "SSL certificate expired";
@@ -67,9 +82,10 @@ export async function POST(request) {
     }
 
     // SSRF guard for remote callers; local host keeps self-hosted nodes (e.g. ollama-local)
-    if (!isLocalRequest(request)) {
+    const guard = await ssrfGuardFor(request);
+    if (guard) {
       try {
-        assertPublicUrl(baseUrl);
+        await assertPublicUrlResolved(baseUrl, guard);
       } catch {
         return NextResponse.json({ error: "URL not allowed" }, { status: 400 });
       }
@@ -88,7 +104,7 @@ export async function POST(request) {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({ model: modelId.trim(), input: "ping" })
-      });
+      }, guard);
       if (embedRes.ok) {
         const data = await embedRes.json().catch(() => null);
         const dims = Array.isArray(data?.data?.[0]?.embedding) ? data.data[0].embedding.length : null;
@@ -120,7 +136,7 @@ export async function POST(request) {
           "anthropic-version": "2023-06-01",
           "Authorization": `Bearer ${apiKey}`
         }
-      });
+      }, guard);
 
       if (res.ok) return NextResponse.json({ valid: true });
 
@@ -144,7 +160,7 @@ export async function POST(request) {
             messages: [{ role: "user", content: "ping" }],
             max_tokens: 1
           })
-        });
+        }, guard);
         if (chatRes.ok) {
           return NextResponse.json({ valid: true, method: "chat" });
         }
@@ -162,7 +178,7 @@ export async function POST(request) {
     const modelsUrl = `${baseUrl.replace(/\/$/, "")}/models`;
     const res = await fetchWithTimeout(modelsUrl, {
       headers: { "Authorization": `Bearer ${apiKey}` },
-    });
+    }, guard);
 
     if (res.ok) return NextResponse.json({ valid: true });
 
@@ -184,7 +200,7 @@ export async function POST(request) {
           messages: [{ role: "user", content: "ping" }],
           max_tokens: 1
         })
-      });
+      }, guard);
       if (chatRes.ok) {
         return NextResponse.json({ valid: true, method: "chat" });
       }
@@ -197,6 +213,10 @@ export async function POST(request) {
 
     return NextResponse.json({ valid: false, error: getModelsErrorMessage(res.status) });
   } catch (error) {
+    // A redirect hop that fetchPublic refused (internal target, too many hops).
+    if (isBlockedUrlError(error)) {
+      return NextResponse.json({ valid: false, error: "URL not allowed" }, { status: 400 });
+    }
     const errorMessage = getErrorMessage(error);
     console.error("Error validating provider node:", {
       message: error.message,

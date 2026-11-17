@@ -144,4 +144,85 @@ describe("fetchPublic: redirect-target re-validation from #3714", () => {
     await expect(fetchPublic("http://127.0.0.1/steal")).rejects.toThrow();
     expect(global.fetch).not.toHaveBeenCalled();
   });
+
+  it("drops credential headers on a cross-origin hop and keeps them on a same-origin one", async () => {
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 302, headers: { Location: "/v1/models" } }))
+      .mockResolvedValueOnce(new Response(null, { status: 302, headers: { Location: "https://other.example.test/" } }))
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+    await fetchPublic("https://api.example.test/models", {
+      headers: {
+        Authorization: "Bearer k", "x-api-key": "k", Cookie: "s=1", "X-Subscription-Token": "brave",
+        Accept: "application/json", "Content-Type": "application/json",
+      },
+    });
+    const sameOrigin = new Headers(global.fetch.mock.calls[1][1].headers);
+    expect(sameOrigin.get("authorization")).toBe("Bearer k");
+    expect(sameOrigin.get("x-subscription-token")).toBe("brave");
+    const crossOrigin = new Headers(global.fetch.mock.calls[2][1].headers);
+    expect([...crossOrigin.keys()].sort()).toEqual(["accept", "content-type"]);
+  });
+});
+
+describe("allowPrivateNetwork: LAN and Tailscale for trusted callers only", () => {
+  beforeEach(() => lookupMock.mockReset());
+
+  it.each([
+    "http://10.0.0.5/v1",
+    "http://172.17.0.1:1234/v1",
+    "http://192.168.1.20:1234/v1",
+    "http://100.109.145.81:1234/v1",
+    "http://[fd7a:115c:a1e0::1]/v1",
+    "http://[::ffff:192.168.1.20]/v1",
+  ])("admits %s", async (url) => {
+    await expect(assertPublicUrlResolved(url, { allowPrivateNetwork: true })).resolves.toBeUndefined();
+    await expect(assertPublicUrlResolved(url)).rejects.toThrow();
+  });
+
+  it.each([
+    "http://127.0.0.1/v1",
+    "http://0.0.0.0/v1",
+    "http://169.254.169.254/latest/meta-data",
+    "http://100.100.100.200/latest/meta-data",
+    "http://[::1]/v1",
+    "http://[::ffff:127.0.0.1]/v1",
+    "http://[::ffff:169.254.169.254]/v1",
+    "http://[fd00:ec2::254]/latest/meta-data",
+    "http://[fd20:ce::254]/computeMetadata/v1",
+    "http://[fe80::1]/v1",
+    "http://localhost/v1",
+    "http://metadata.google.internal/computeMetadata/v1",
+    "http://app.localhost/v1",
+  ])("still blocks %s", async (url) => {
+    await expect(assertPublicUrlResolved(url, { allowPrivateNetwork: true })).rejects.toThrow();
+  });
+
+  it("admits a LAN name that resolves to a private address, not one that resolves to loopback", async () => {
+    lookupMock.mockResolvedValue([{ address: "192.168.1.20", family: 4 }]);
+    await expect(assertPublicUrlResolved("http://mac-studio.local:1234/v1", { allowPrivateNetwork: true })).resolves.toBeUndefined();
+    lookupMock.mockResolvedValue([{ address: "127.0.0.1", family: 4 }]);
+    await expect(assertPublicUrlResolved("http://mac-studio.local:1234/v1", { allowPrivateNetwork: true })).rejects.toThrow();
+    lookupMock.mockResolvedValue([{ address: "169.254.169.254", family: 4 }]);
+    await expect(assertPublicUrlResolved("http://lan.example.test/v1", { allowPrivateNetwork: true })).rejects.toThrow();
+  });
+
+  it("assertPublicUrl stays public-only", () => {
+    expect(() => assertPublicUrl("http://192.168.1.20/v1")).toThrow();
+    expect(() => assertPublicUrl("http://mac-studio.local/v1")).toThrow();
+  });
+
+  it("fetchPublic re-checks every hop in private mode: LAN → metadata redirect is refused", async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValueOnce(
+      new Response(null, { status: 302, headers: { Location: "http://169.254.169.254/latest/meta-data" } }),
+    );
+    try {
+      await expect(fetchPublic("http://192.168.1.20:1234/v1/models", {}, { allowPrivateNetwork: true }))
+        .rejects.toThrow(/Blocked URL/);
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
 });

@@ -197,6 +197,70 @@ describe("/api/provider-nodes/validate (SSRF)", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  const withCookie = (cookie, body) =>
+    new Request("http://localhost/api", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify(body),
+    });
+  const session = async () => {
+    const { createDashboardAuthToken } = await import("@/lib/auth/dashboardSession");
+    return `auth_token=${await createDashboardAuthToken()}`;
+  };
+
+  it.each([
+    "http://100.109.145.81:1234/v1",
+    "http://192.168.1.20:1234/v1",
+    "http://10.0.0.5/v1",
+    "http://[fd7a:115c:a1e0::1]:1234/v1",
+  ])("lets a signed-in session test LAN/Tailscale target %s", async (baseUrl) => {
+    const fetchSpy = vi.fn(async () => Response.json({ data: [] }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const { POST } = await validate();
+    const res = await POST(withCookie(await session(), { baseUrl, apiKey: "k" }));
+    expect(await res.json()).toEqual({ valid: true });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    "http://127.0.0.1:20128/v1",
+    "http://169.254.169.254/latest/meta-data",
+    "http://100.100.100.200/latest/meta-data",
+    "http://[::1]/v1",
+    "http://localhost/v1",
+    "http://[fd00:ec2::254]/latest/meta-data",
+  ])("still refuses %s for a signed-in session", async (baseUrl) => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const { POST } = await validate();
+    const res = await POST(withCookie(await session(), { baseUrl, apiKey: "k" }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("URL not allowed");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not take a forged or garbled session cookie for a signed-in one", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const { POST } = await validate();
+    for (const cookie of ["auth_token=eyJhbGciOiJIUzI1NiJ9.e30.forged", "auth_token=%E0%A4%A", "other=1"]) {
+      const res = await POST(withCookie(cookie, { baseUrl: "http://192.168.1.20:1234/v1", apiKey: "k" }));
+      expect(res.status).toBe(400);
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("refuses a LAN endpoint that redirects to cloud metadata, without following it", async () => {
+    const fetchSpy = vi.fn(async () =>
+      new Response(null, { status: 302, headers: { Location: "http://169.254.169.254/latest/meta-data" } }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const { POST } = await validate();
+    const res = await POST(withCookie(await session(), { baseUrl: "http://192.168.1.20:1234/v1", apiKey: "k" }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("URL not allowed");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("validates OpenAI, Anthropic and embedding nodes against a public URL", async () => {
     const { POST } = await validate();
     const fetchSpy = vi.fn(async (url) => {

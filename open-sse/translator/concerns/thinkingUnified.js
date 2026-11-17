@@ -125,11 +125,31 @@ function openAIThinkingDisplay(body) {
   return undefined;
 }
 
+const CLAUDE_MIN_BUDGET = 1024;
+
 const NATIVE_ONLY_FORMATS = new Set(["gemini-level", "gemini-budget", "claude-budget", "claude-adaptive", "kiro"]);
 
 // Self-hosted gateways (vLLM/SGLang) validate thinking.budget_tokens; first-party
 // DeepSeek ignores it. Only dynamic compat nodes opt into the passthrough.
 const isOpenAICompatibleNode = (provider) => String(provider || "").startsWith("openai-compatible-");
+const isAnthropicCompatibleNode = (provider) => String(provider || "").startsWith("anthropic-compatible-");
+
+// Model-name formats a dynamic compat node keeps. On a user's own endpoint (LM Studio,
+// llama-server, vLLM, Ollama, a relay) the model name says who trained the model, not
+// what the server accepts: a "qwen…" model on LM Studio ignores DashScope's
+// enable_thinking and only turns thinking off with reasoning_effort:"none". So a node
+// speaks its wire's own shape. deepseek stays on OpenAI nodes: self-hosted DeepSeek
+// gateways validate thinking.budget_tokens (see budgetPassthrough below).
+const COMPAT_NODE_FORMATS = {
+  openai: new Set(["openai", "deepseek"]),
+  claude: new Set(["claude-adaptive", "claude-budget"]),
+};
+
+function compatNodeWire(provider) {
+  if (isOpenAICompatibleNode(provider)) return "openai";
+  if (isAnthropicCompatibleNode(provider)) return "claude";
+  return null;
+}
 
 function resolveFormat(targetFormat, model, provider) {
   if (targetFormat === "commandcode") return "commandcode";
@@ -144,6 +164,11 @@ function resolveFormat(targetFormat, model, provider) {
   const providerFmt = provider ? PROVIDERS[provider]?.thinkingFormat : null;
   if (providerFmt) return providerFmt;
   const caps = getCapabilitiesForModel(provider, model);
+  const nodeWire = compatNodeWire(provider);
+  if (nodeWire) {
+    const fmt = caps.thinkingFormat;
+    return fmt && COMPAT_NODE_FORMATS[nodeWire].has(fmt) ? fmt : FORMAT_TO_NATIVE[targetFormat] || "openai";
+  }
   const isOpenAIWire = targetFormat === "openai" || targetFormat === "openai-responses";
   if (caps.thinkingFormat && !(isOpenAIWire && NATIVE_ONLY_FORMATS.has(caps.thinkingFormat))) {
     return caps.thinkingFormat;
@@ -313,7 +338,10 @@ function applyFormat(fmt, body, cfg, caps, supportedLevels, display, model = "",
     case "claude-budget": {
       if (none && canDisable) { body.thinking = { type: "disabled" }; break; }
       const budget = toBudget(eff, caps.thinkingRange);
-      body.thinking = budget === -1 ? { type: "enabled", ...(display ? { display } : {}) } : { type: "enabled", budget_tokens: budget || 8192, ...(display ? { display } : {}) };
+      // The Messages API rejects budget_tokens below 1024; "minimal" (and a "none"
+      // clamped to it on always-thinking models) maps to 512.
+      const budgetTokens = budget ? Math.max(budget, CLAUDE_MIN_BUDGET) : 8192;
+      body.thinking = budget === -1 ? { type: "enabled", ...(display ? { display } : {}) } : { type: "enabled", budget_tokens: budgetTokens, ...(display ? { display } : {}) };
       break;
     }
     case "gemini-level": {
