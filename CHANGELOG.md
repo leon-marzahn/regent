@@ -1,4 +1,10 @@
 
+# v102.5.1 (2026-11-17)
+
+## Fixes
+- **openrouter**: Cache Anthropic prompts for every client and record the billed cost (#173)
+- **usage**: Strip upstream billing fields from client-facing usage (#174)
+
 # v102.5.0 (2026-11-16)
 
 ## Fixes
