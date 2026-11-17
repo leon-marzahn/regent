@@ -1,3 +1,9 @@
+// Cache-write count from an OpenAI-shaped prompt_tokens_details: ours (buildUsage) is
+// cache_creation_tokens, OpenRouter reports cache_write_tokens. undefined when absent.
+export function openaiCacheWriteTokens(details) {
+  return details?.cache_creation_tokens ?? details?.cache_write_tokens;
+}
+
 // Build OpenAI usage object. Caller computes prompt/completion/total (provider math).
 // Optional details added only when > 0 (matches existing claude/gemini/codex behavior).
 export function buildUsage({ promptTokens, completionTokens, totalTokens, cachedTokens = 0, cacheCreationTokens = 0, reasoningTokens = 0 }) {

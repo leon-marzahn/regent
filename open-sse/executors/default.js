@@ -10,7 +10,7 @@ import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 import { stripUnsupportedParams } from "../translator/concerns/paramSupport.js";
 import { extractClaudeSessionIdFromUserId } from "../utils/claudeCloaking.js";
 import { PROVIDER_ROUTING_FIELD, applyProviderRouting } from "../config/providerRouting.js";
-import { anchorOpenAICache } from "../translator/formats/openai.js";
+import { anchorOpenAICache, matchesModelPrefix } from "../translator/formats/openai.js";
 
 // Auth header descriptors — derived from registry transport.auth, fallback to hardcoded defaults.
 const BEARER = { combined: true, header: "Authorization", scheme: "bearer" };
@@ -117,8 +117,8 @@ export class DefaultExecutor extends BaseExecutor {
       }
       // quirk: add cache breakpoints for models that only cache up to explicit ones
       // (value: upstream model-id prefixes, e.g. ["anthropic/"] on OpenRouter)
-      const anchorPrefixes = this.config.quirks?.autoCacheBreakpoints;
-      if (Array.isArray(anchorPrefixes) && typeof model === "string" && anchorPrefixes.some((p) => model.startsWith(p))) {
+      // Match the id actually sent: an upstream-id mapping may have rewritten body.model.
+      if (matchesModelPrefix(transformed.model ?? model, this.config.quirks?.autoCacheBreakpoints)) {
         transformed = anchorOpenAICache(transformed);
       }
       stripUnsupportedParams(this.provider, model, transformed);

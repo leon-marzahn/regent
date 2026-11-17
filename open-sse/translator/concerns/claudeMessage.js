@@ -1,5 +1,6 @@
 import { FORMATS } from "../formats.js";
 import { fromOpenAIFinish } from "./finishReason.js";
+import { openaiCacheWriteTokens } from "./usage.js";
 import { CLAUDE_BLOCK, MODEL_FALLBACK, RESPONSES_ITEM, ROLE } from "../schema/index.js";
 
 function parseToolArguments(value) {
@@ -61,7 +62,7 @@ export function openAICompletionToClaudeMessage(responseBody) {
 // input_tokens is passed through as is.
 function claudeUsageFromOpenAI(usage) {
   const cacheRead = usage.cache_read_input_tokens ?? usage.prompt_tokens_details?.cached_tokens;
-  const cacheCreation = usage.cache_creation_input_tokens ?? usage.prompt_tokens_details?.cache_creation_tokens;
+  const cacheCreation = usage.cache_creation_input_tokens ?? openaiCacheWriteTokens(usage.prompt_tokens_details);
   const inputTokens = usage.prompt_tokens != null
     ? Math.max(0, usage.prompt_tokens - (cacheRead || 0) - (cacheCreation || 0))
     : usage.input_tokens || 0;

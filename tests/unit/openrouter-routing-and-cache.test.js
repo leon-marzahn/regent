@@ -7,7 +7,10 @@ import {
   parseProviderSlugs,
   validateProviderRouting,
 } from "../../open-sse/config/providerRouting.js";
-import { anchorOpenAICache, filterToOpenAIFormat } from "../../open-sse/translator/formats/openai.js";
+import { anchorOpenAICache, filterToOpenAIFormat, matchesModelPrefix } from "../../open-sse/translator/formats/openai.js";
+import { canonicalizeUsage } from "../../open-sse/utils/usageTracking.js";
+import { openAICompletionToClaudeMessage } from "../../open-sse/translator/concerns/claudeMessage.js";
+import { openaiToClaudeResponse } from "../../open-sse/translator/response/openai-to-claude.js";
 import { DefaultExecutor } from "../../open-sse/executors/default.js";
 import { translateRequest } from "../../open-sse/translator/index.js";
 import { AI_PROVIDERS } from "../../src/shared/constants/providers.js";
@@ -116,13 +119,56 @@ describe("OpenRouter adds cache breakpoints for Anthropic models when the client
 
   it("covers Claude clients using top-level cache_control and the Responses API", () => {
     const claude = translateRequest("claude", "openai", "anthropic/claude-opus-5.5",
-      { model: "x", max_tokens: 10, cache_control: { type: "ephemeral" }, system: "rules", messages: [{ role: "user", content: "hi" }] },
+      { model: "anthropic/claude-opus-5.5", max_tokens: 10, cache_control: { type: "ephemeral" }, system: "rules",
+        messages: [{ role: "user", content: "hi" }, { role: "assistant", content: "hello" }, { role: "user", content: "again" }] },
       true, null, "openrouter");
-    expect(markedText(send("anthropic/claude-opus-5.5", claude))).toEqual(["system:rules", "user:hi"]);
+    expect(markedText(send("anthropic/claude-opus-5.5", claude))).toEqual(["system:rules", "user:again"]);
 
     const responses = translateRequest("openai-responses", "openai", "anthropic/claude-opus-5.5",
-      { model: "x", instructions: "rules", input: "hi" }, true, null, "openrouter");
-    expect(markedText(send("anthropic/claude-opus-5.5", responses)).length).toBe(2);
+      { model: "anthropic/claude-opus-5.5", instructions: "rules", input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "hello" }] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "again" }] },
+      ] }, true, null, "openrouter");
+    expect(markedText(send("anthropic/claude-opus-5.5", responses))).toEqual(["system:rules", "user:again"]);
+  });
+
+  it("marks only the system prompt on a one-shot request", () => {
+    const out = send("anthropic/claude-opus-5.5", { messages: [{ role: "system", content: "rules" }, { role: "user", content: "summarise this" }] });
+    expect(markedText(out)).toEqual(["system:rules"]);
+  });
+
+  it("never marks a system message after the conversation started", () => {
+    const out = send("anthropic/claude-opus-5.5", {
+      messages: [
+        { role: "system", content: "rules" },
+        { role: "user", content: "a" },
+        { role: "assistant", content: "b" },
+        { role: "user", content: "next" },
+        { role: "developer", content: "per-turn reminder" },
+      ],
+    });
+    expect(markedText(out)).toEqual(["system:rules", "user:next"]);
+  });
+
+  it("takes the TTL from a top-level cache_control and does not mutate nested parts", () => {
+    const parts = [{ type: "text", text: "rules" }];
+    const out = anchorOpenAICache({
+      cache_control: { type: "ephemeral", ttl: "1h" },
+      messages: [{ role: "system", content: parts }, { role: "user", content: "a" }, { role: "assistant", content: [{ type: "refusal" }] }],
+    });
+    expect(out.messages[0].content[0].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+    expect(out.messages[1].content[0].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+    expect(parts[0].cache_control).toBeUndefined();
+  });
+
+  it("matches upstream ids case-insensitively, through ~ aliases and the id actually sent", () => {
+    expect(matchesModelPrefix("~anthropic/claude-opus-latest", ["anthropic/"])).toBe(true);
+    expect(matchesModelPrefix("Anthropic/claude-opus-5.5:thinking", ["anthropic/"])).toBe(true);
+    expect(matchesModelPrefix("openrouter/auto", ["anthropic/"])).toBe(false);
+    expect(matchesModelPrefix("anthropic/x", undefined)).toBe(false);
+    const mapped = send("alias-model", { model: "anthropic/claude-opus-5.5", messages: [{ role: "system", content: "rules" }, { role: "user", content: "hi" }] });
+    expect(markedText(mapped)).toEqual(["system:rules"]);
   });
 
   it("leaves the client's own markers alone", () => {
@@ -140,6 +186,24 @@ describe("OpenRouter adds cache breakpoints for Anthropic models when the client
     expect(anchorOpenAICache({ messages: [] })).toEqual({ messages: [] });
     expect(anchorOpenAICache({})).toEqual({});
     expect(markedText(anchorOpenAICache({ messages: [{ role: "user", content: "" }, { role: "system", content: "" }] }))).toEqual([]);
+  });
+});
+
+describe("OpenRouter cache writes (cache_write_tokens) are counted", () => {
+  // As OpenRouter reports a cache write: prompt_tokens includes it.
+  const usage = { prompt_tokens: 24614, completion_tokens: 4, prompt_tokens_details: { cached_tokens: 0, cache_write_tokens: 24602 } };
+
+  it("in stored usage", () => {
+    expect(canonicalizeUsage(usage)).toMatchObject({ prompt_tokens: 24614, cache_creation_input_tokens: 24602 });
+  });
+
+  it("in Claude-format responses, streamed and not", () => {
+    const state = {};
+    openaiToClaudeResponse({ choices: [], usage }, state);
+    expect(state.usage).toEqual({ input_tokens: 12, output_tokens: 4, cache_creation_input_tokens: 24602 });
+
+    const message = openAICompletionToClaudeMessage({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }], usage });
+    expect(message.usage).toMatchObject({ input_tokens: 12, cache_creation_input_tokens: 24602 });
   });
 });
 

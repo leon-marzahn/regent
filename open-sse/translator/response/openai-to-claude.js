@@ -3,6 +3,7 @@ import { FORMATS } from "../formats.js";
 import { ROLE, CLAUDE_BLOCK, MODEL_FALLBACK } from "../schema/index.js";
 import { fromOpenAIFinish } from "../concerns/finishReason.js";
 import { extractReasoningText } from "../concerns/reasoning.js";
+import { openaiCacheWriteTokens } from "../concerns/usage.js";
 
 // Legacy "proxy_" prefix used by older request translators. Response strips it
 // defensively so tool names from such turns resolve back (e.g. proxy_Read → Read
@@ -79,7 +80,7 @@ export function openaiToClaudeResponse(chunk, state) {
 
     // Extract cache tokens from prompt_tokens_details
     const cachedTokens = chunk.usage.prompt_tokens_details?.cached_tokens;
-    const cacheCreationTokens = chunk.usage.prompt_tokens_details?.cache_creation_tokens;
+    const cacheCreationTokens = openaiCacheWriteTokens(chunk.usage.prompt_tokens_details);
     const cacheReadTokens = typeof cachedTokens === "number" ? cachedTokens : 0;
     const cacheCreateTokens = typeof cacheCreationTokens === "number" ? cacheCreationTokens : 0;
 

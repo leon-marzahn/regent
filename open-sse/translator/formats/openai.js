@@ -34,50 +34,69 @@ function hasCacheControl(messages) {
   return messages.some((m) => Array.isArray(m?.content) && m.content.some((p) => p?.cache_control));
 }
 
-// Copy of `msg` with a 5m breakpoint on its last cacheable part (string content becomes
-// one text part), or null when it has nothing that can carry one (e.g. an assistant turn
-// that only holds tool_calls).
-function withBreakpoint(msg) {
+const isSystemRole = (msg) => msg?.role === ROLE.SYSTEM || msg?.role === ROLE.DEVELOPER;
+
+// Copy of `msg` with a breakpoint on its last cacheable part (string content becomes one
+// text part), or null when it has nothing that can carry one (e.g. an assistant turn that
+// only holds tool_calls).
+function withBreakpoint(msg, marker) {
   if (typeof msg?.content === "string") {
     if (!msg.content) return null;
-    return { ...msg, content: [{ type: OPENAI_BLOCK.TEXT, text: msg.content, cache_control: { ...CACHE_CONTROL_5M } }] };
+    return { ...msg, content: [{ type: OPENAI_BLOCK.TEXT, text: msg.content, cache_control: { ...marker } }] };
   }
   if (!Array.isArray(msg?.content)) return null;
   for (let i = msg.content.length - 1; i >= 0; i--) {
     const part = msg.content[i];
     if (!CACHEABLE_PART_TYPES.has(part?.type) || (part.type === OPENAI_BLOCK.TEXT && !part.text)) continue;
     const content = [...msg.content];
-    content[i] = { ...part, cache_control: { ...CACHE_CONTROL_5M } };
+    content[i] = { ...part, cache_control: { ...marker } };
     return { ...msg, content };
   }
   return null;
 }
 
+// A client's top-level cache_control (OpenRouter/Anthropic automatic caching) sets the TTL.
+function breakpointFor(body) {
+  const top = body?.cache_control;
+  return top && typeof top === "object" && typeof top.ttl === "string" ? { ...CACHE_CONTROL_5M, ttl: top.ttl } : CACHE_CONTROL_5M;
+}
+
 // Prompt caching for clients that send no cache_control of their own (most OpenAI-format
 // clients, the Responses API, Claude's top-level `cache_control`). Anthropic-backed
 // upstreams behind an aggregator (OpenRouter -> Anthropic/Vertex/Bedrock) cache only up to
-// explicit breakpoints, so without any every turn pays full input price. Two breakpoints,
-// as Anthropic's automatic caching would place them:
-// - the last system message: tools + system, the prefix every request shares;
-// - the last message that can carry one: the whole conversation so far. The next request
-//   extends it, and Anthropic's lookback finds this breakpoint, so it reads from cache.
+// explicit breakpoints, so without any every turn pays full input price. Up to two:
+// - head: the last system message of the leading run (tools + system), the prefix every
+//   request shares. A system message later in the conversation (a per-turn reminder) is
+//   volatile and never marked;
+// - tail: the last non-system message that can carry one, i.e. the conversation so far.
+//   The next request extends it and Anthropic's lookback finds this breakpoint. Only once
+//   an assistant turn exists: a one-shot request (title, summary, classify) would pay the
+//   cache-write premium on a tail nothing ever reads back.
 // A client that placed its own markers keeps them untouched. Returns a new body.
 export function anchorOpenAICache(body) {
   const messages = body?.messages;
   if (!Array.isArray(messages) || !messages.length || hasCacheControl(messages)) return body;
+  const marker = breakpointFor(body);
   const out = [...messages];
-  for (let i = out.length - 1; i >= 0; i--) {
-    if (out[i]?.role !== ROLE.SYSTEM && out[i]?.role !== ROLE.DEVELOPER) continue;
-    const marked = withBreakpoint(out[i]);
-    if (marked) out[i] = marked;
-    break;
-  }
-  for (let i = out.length - 1; i >= 0; i--) {
-    if (out[i]?.role === ROLE.SYSTEM || out[i]?.role === ROLE.DEVELOPER) break;
-    const marked = withBreakpoint(out[i]);
-    if (marked) { out[i] = marked; break; }
+  let head = -1;
+  while (head + 1 < out.length && isSystemRole(out[head + 1])) head++;
+  if (head >= 0) out[head] = withBreakpoint(out[head], marker) ?? out[head];
+  if (out.some((m) => m?.role === ROLE.ASSISTANT)) {
+    for (let i = out.length - 1; i > head; i--) {
+      if (isSystemRole(out[i])) continue;
+      const marked = withBreakpoint(out[i], marker);
+      if (marked) { out[i] = marked; break; }
+    }
   }
   return { ...body, messages: out };
+}
+
+// Whether an upstream model id falls under one of the quirk's prefixes. OpenRouter ids
+// may carry a `~` "latest" alias and are matched case-insensitively.
+export function matchesModelPrefix(model, prefixes) {
+  if (typeof model !== "string" || !Array.isArray(prefixes)) return false;
+  const id = model.toLowerCase().replace(/^~/, "");
+  return prefixes.some((p) => typeof p === "string" && id.startsWith(p.toLowerCase()));
 }
 
 // Filter messages to OpenAI standard format
