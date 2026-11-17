@@ -7,7 +7,13 @@ import {
   parseProviderSlugs,
   validateProviderRouting,
 } from "../../open-sse/config/providerRouting.js";
-import { filterToOpenAIFormat } from "../../open-sse/translator/formats/openai.js";
+import { anchorOpenAICache, filterToOpenAIFormat, matchesModelPrefix } from "../../open-sse/translator/formats/openai.js";
+import { canonicalizeUsage, extractUsage, filterUsageForFormat } from "../../open-sse/utils/usageTracking.js";
+import { reportedUsageCost } from "../../open-sse/translator/concerns/usage.js";
+import { extractUsageFromResponse } from "../../open-sse/handlers/chatCore/requestDetail.js";
+import { calculateCost } from "../../src/lib/db/repos/usageRepo.js";
+import { openAICompletionToClaudeMessage } from "../../open-sse/translator/concerns/claudeMessage.js";
+import { openaiToClaudeResponse } from "../../open-sse/translator/response/openai-to-claude.js";
 import { DefaultExecutor } from "../../open-sse/executors/default.js";
 import { translateRequest } from "../../open-sse/translator/index.js";
 import { AI_PROVIDERS } from "../../src/shared/constants/providers.js";
@@ -78,6 +84,170 @@ describe("OpenRouter keeps cache_control markers", () => {
     const body = { messages: [{ role: "user", content: [{ type: "text", text: "a", cache_control: ephemeral }] }] };
     filterToOpenAIFormat(body, { preserveCacheControl: true });
     expect(body.messages[0].content[0].cache_control).toEqual(ephemeral);
+  });
+});
+
+describe("OpenRouter adds cache breakpoints for Anthropic models when the client sends none", () => {
+  const executor = new DefaultExecutor("openrouter");
+  const send = (model, body) => executor.transformRequest(model, body, true, { apiKey: "sk-test" });
+  const markedText = (body) => body.messages.flatMap((m) =>
+    Array.isArray(m.content) ? m.content.filter((p) => p.cache_control).map((p) => `${m.role}:${p.text ?? p.type}`) : []);
+
+  it("marks the system prompt and the tail of a tool loop", () => {
+    const body = {
+      model: "anthropic/claude-opus-5.5",
+      messages: [
+        { role: "system", content: "stable rules" },
+        { role: "user", content: "list /a" },
+        { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "ls", arguments: "{}" } }] },
+        { role: "tool", tool_call_id: "c1", content: "a.txt" },
+      ],
+    };
+    const out = send("anthropic/claude-opus-5.5", body);
+    expect(markedText(out)).toEqual(["system:stable rules", "tool:a.txt"]);
+    expect(out.messages[0].content[0].cache_control).toEqual({ type: "ephemeral" });
+    expect(body.messages[0].content).toBe("stable rules");
+  });
+
+  it("skips a trailing turn that cannot carry a marker and uses the last part of array content", () => {
+    const out = send("anthropic/claude-opus-5.5", {
+      messages: [
+        { role: "developer", content: [{ type: "text", text: "rules" }, { type: "text", text: "more rules" }] },
+        { role: "user", content: [{ type: "text", text: "look" }, { type: "image_url", image_url: { url: "data:x" } }] },
+        { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "f", arguments: "{}" } }] },
+      ],
+    });
+    expect(markedText(out)).toEqual(["developer:more rules", "user:image_url"]);
+  });
+
+  it("covers Claude clients using top-level cache_control and the Responses API", () => {
+    const claude = translateRequest("claude", "openai", "anthropic/claude-opus-5.5",
+      { model: "anthropic/claude-opus-5.5", max_tokens: 10, cache_control: { type: "ephemeral" }, system: "rules",
+        messages: [{ role: "user", content: "hi" }, { role: "assistant", content: "hello" }, { role: "user", content: "again" }] },
+      true, null, "openrouter");
+    expect(markedText(send("anthropic/claude-opus-5.5", claude))).toEqual(["system:rules", "user:again"]);
+
+    const responses = translateRequest("openai-responses", "openai", "anthropic/claude-opus-5.5",
+      { model: "anthropic/claude-opus-5.5", instructions: "rules", input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "hello" }] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "again" }] },
+      ] }, true, null, "openrouter");
+    expect(markedText(send("anthropic/claude-opus-5.5", responses))).toEqual(["system:rules", "user:again"]);
+  });
+
+  it("marks only the system prompt on a one-shot request", () => {
+    const out = send("anthropic/claude-opus-5.5", { messages: [{ role: "system", content: "rules" }, { role: "user", content: "summarise this" }] });
+    expect(markedText(out)).toEqual(["system:rules"]);
+  });
+
+  it("never marks a system message after the conversation started", () => {
+    const out = send("anthropic/claude-opus-5.5", {
+      messages: [
+        { role: "system", content: "rules" },
+        { role: "user", content: "a" },
+        { role: "assistant", content: "b" },
+        { role: "user", content: "next" },
+        { role: "developer", content: "per-turn reminder" },
+      ],
+    });
+    expect(markedText(out)).toEqual(["system:rules", "user:next"]);
+  });
+
+  it("takes the TTL from a top-level cache_control and does not mutate nested parts", () => {
+    const parts = [{ type: "text", text: "rules" }];
+    const out = anchorOpenAICache({
+      cache_control: { type: "ephemeral", ttl: "1h" },
+      messages: [{ role: "system", content: parts }, { role: "user", content: "a" }, { role: "assistant", content: [{ type: "refusal" }] }],
+    });
+    expect(out.messages[0].content[0].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+    expect(out.messages[1].content[0].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+    expect(parts[0].cache_control).toBeUndefined();
+  });
+
+  it("matches upstream ids case-insensitively, through ~ aliases and the id actually sent", () => {
+    expect(matchesModelPrefix("~anthropic/claude-opus-latest", ["anthropic/"])).toBe(true);
+    expect(matchesModelPrefix("Anthropic/claude-opus-5.5:thinking", ["anthropic/"])).toBe(true);
+    expect(matchesModelPrefix("openrouter/auto", ["anthropic/"])).toBe(false);
+    expect(matchesModelPrefix("anthropic/x", undefined)).toBe(false);
+    const mapped = send("alias-model", { model: "anthropic/claude-opus-5.5", messages: [{ role: "system", content: "rules" }, { role: "user", content: "hi" }] });
+    expect(markedText(mapped)).toEqual(["system:rules"]);
+  });
+
+  it("leaves the client's own markers alone", () => {
+    const out = send("anthropic/claude-opus-5.5", translateRequest("claude", "openai", "anthropic/claude-opus-5.5", claudeBody(), true, null, "openrouter"));
+    expect(markedText(out)).toEqual(["system:stable system prompt", "user:earlier turn"]);
+  });
+
+  it("leaves a body alone when the client marked its tools", () => {
+    const body = {
+      tools: [{ type: "function", function: { name: "f" }, cache_control: { type: "ephemeral" } }],
+      messages: [{ role: "system", content: "rules" }, { role: "user", content: "a" }, { role: "assistant", content: "b" }],
+    };
+    expect(anchorOpenAICache(body)).toBe(body);
+  });
+
+  it("does nothing for other models or providers", () => {
+    const body = () => ({ messages: [{ role: "system", content: "rules" }, { role: "user", content: "hi" }] });
+    expect(markedText(send("openai/gpt-5", body()))).toEqual([]);
+    expect(markedText(new DefaultExecutor("groq").transformRequest("anthropic/claude-opus-5.5", body(), true, { apiKey: "k" }))).toEqual([]);
+  });
+
+  it("handles bodies with nothing to mark", () => {
+    expect(anchorOpenAICache({ messages: [] })).toEqual({ messages: [] });
+    expect(anchorOpenAICache({})).toEqual({});
+    expect(markedText(anchorOpenAICache({ messages: [{ role: "user", content: "" }, { role: "system", content: "" }] }))).toEqual([]);
+  });
+});
+
+describe("OpenRouter cache writes (cache_write_tokens) are counted", () => {
+  // As OpenRouter reports a cache write: prompt_tokens includes it.
+  const usage = { prompt_tokens: 24614, completion_tokens: 4, prompt_tokens_details: { cached_tokens: 0, cache_write_tokens: 24602 } };
+
+  it("in stored usage", () => {
+    expect(canonicalizeUsage(usage)).toMatchObject({ prompt_tokens: 24614, cache_creation_input_tokens: 24602 });
+  });
+
+  it("in Claude-format responses, streamed and not", () => {
+    const state = {};
+    openaiToClaudeResponse({ choices: [], usage }, state);
+    expect(state.usage).toEqual({ input_tokens: 12, output_tokens: 4, cache_creation_input_tokens: 24602 });
+
+    const message = openAICompletionToClaudeMessage({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }], usage });
+    expect(message.usage).toMatchObject({ input_tokens: 12, cache_creation_input_tokens: 24602 });
+  });
+});
+
+describe("OpenRouter's reported cost is recorded as the request cost", () => {
+  const usage = { prompt_tokens: 15487, completion_tokens: 20, prompt_tokens_details: { cache_write_tokens: 15485 }, cost: 0.077833 };
+
+  it("reads usage.cost, adding the upstream bill for BYOK", () => {
+    expect(reportedUsageCost(usage)).toBe(0.077833);
+    expect(reportedUsageCost({ cost: 0 })).toBe(0);
+    expect(reportedUsageCost({ cost: 0.001, is_byok: true, cost_details: { upstream_inference_cost: 0.02 } })).toBeCloseTo(0.021);
+    expect(reportedUsageCost({ cost: 0.001, is_byok: false, cost_details: { upstream_inference_cost: 0.02 } })).toBe(0.001);
+    for (const bad of [{}, { cost: null }, { cost: -1 }, { cost: "x" }, { cost: "" }, { cost: "0.5" }, { cost: true }, { cost: [] }, null]) {
+      expect(reportedUsageCost(bad)).toBeUndefined();
+    }
+    expect(reportedUsageCost({ cost: 0.001, is_byok: true, cost_details: { upstream_inference_cost: "0.02" } })).toBe(0.001);
+  });
+
+  it("survives extraction and canonicalization, streamed and not", () => {
+    const fromChunk = canonicalizeUsage(extractUsage({ choices: [], usage }));
+    const fromBody = canonicalizeUsage(extractUsageFromResponse({ choices: [{ message: { content: "OK" } }], usage }));
+    for (const t of [fromChunk, fromBody]) expect(t).toMatchObject({ cost_usd: 0.077833, cache_creation_input_tokens: 15485 });
+
+    const state = {};
+    openaiToClaudeResponse({ choices: [], usage }, state);
+    expect(state.usage.cost_usd).toBe(0.077833);
+    expect(filterUsageForFormat(state.usage, "claude").cost_usd).toBeUndefined();
+  });
+
+  it("is preferred over the price table, only for providers that report billed USD", async () => {
+    const tokens = { prompt_tokens: 15487, completion_tokens: 20, cache_creation_input_tokens: 15485, cost_usd: 0.077833 };
+    expect(await calculateCost("openrouter", "anthropic/claude-opus-5.5", tokens)).toBe(0.077833);
+    expect(await calculateCost("openrouter", "anthropic/claude-opus-5.5", { ...tokens, cost_usd: 0 })).toBe(0);
+    expect(await calculateCost("groq", "anthropic/claude-opus-5.5", tokens)).not.toBe(0.077833);
   });
 });
 
