@@ -76,6 +76,9 @@ function breakpointFor(body) {
 export function anchorOpenAICache(body) {
   const messages = body?.messages;
   if (!Array.isArray(messages) || !messages.length || hasCacheControl(messages)) return body;
+  // Markers on tools are the client's own caching too (and adding ours could pass the
+  // 4-marker limit or put a longer TTL after a shorter one).
+  if (Array.isArray(body.tools) && body.tools.some((t) => t?.cache_control)) return body;
   const marker = breakpointFor(body);
   const out = [...messages];
   let head = -1;

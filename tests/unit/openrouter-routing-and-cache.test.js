@@ -176,6 +176,14 @@ describe("OpenRouter adds cache breakpoints for Anthropic models when the client
     expect(markedText(out)).toEqual(["system:stable system prompt", "user:earlier turn"]);
   });
 
+  it("leaves a body alone when the client marked its tools", () => {
+    const body = {
+      tools: [{ type: "function", function: { name: "f" }, cache_control: { type: "ephemeral" } }],
+      messages: [{ role: "system", content: "rules" }, { role: "user", content: "a" }, { role: "assistant", content: "b" }],
+    };
+    expect(anchorOpenAICache(body)).toBe(body);
+  });
+
   it("does nothing for other models or providers", () => {
     const body = () => ({ messages: [{ role: "system", content: "rules" }, { role: "user", content: "hi" }] });
     expect(markedText(send("openai/gpt-5", body()))).toEqual([]);
