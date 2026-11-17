@@ -8,10 +8,11 @@ export function openaiCacheWriteTokens(details) {
 // `cost`, which with BYOK is only OpenRouter's fee; the upstream then bills
 // cost_details.upstream_inference_cost to the user's own key). undefined when absent.
 export function reportedUsageCost(usage) {
-  const cost = Number(usage?.cost);
-  if (usage?.cost == null || !Number.isFinite(cost) || cost < 0) return undefined;
-  const upstream = Number(usage.cost_details?.upstream_inference_cost);
-  return usage.is_byok === true && Number.isFinite(upstream) && upstream > 0 ? cost + upstream : cost;
+  // Numbers only: a coerced "" or true would override the price table with $0 or $1.
+  const cost = usage?.cost;
+  if (typeof cost !== "number" || !Number.isFinite(cost) || cost < 0) return undefined;
+  const upstream = usage.cost_details?.upstream_inference_cost;
+  return usage.is_byok === true && typeof upstream === "number" && Number.isFinite(upstream) && upstream > 0 ? cost + upstream : cost;
 }
 
 // Build OpenAI usage object. Caller computes prompt/completion/total (provider math).

@@ -226,7 +226,10 @@ describe("OpenRouter's reported cost is recorded as the request cost", () => {
     expect(reportedUsageCost({ cost: 0 })).toBe(0);
     expect(reportedUsageCost({ cost: 0.001, is_byok: true, cost_details: { upstream_inference_cost: 0.02 } })).toBeCloseTo(0.021);
     expect(reportedUsageCost({ cost: 0.001, is_byok: false, cost_details: { upstream_inference_cost: 0.02 } })).toBe(0.001);
-    for (const bad of [{}, { cost: null }, { cost: -1 }, { cost: "x" }, null]) expect(reportedUsageCost(bad)).toBeUndefined();
+    for (const bad of [{}, { cost: null }, { cost: -1 }, { cost: "x" }, { cost: "" }, { cost: "0.5" }, { cost: true }, { cost: [] }, null]) {
+      expect(reportedUsageCost(bad)).toBeUndefined();
+    }
+    expect(reportedUsageCost({ cost: 0.001, is_byok: true, cost_details: { upstream_inference_cost: "0.02" } })).toBe(0.001);
   });
 
   it("survives extraction and canonicalization, streamed and not", () => {
