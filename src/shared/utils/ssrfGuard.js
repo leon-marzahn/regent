@@ -181,8 +181,10 @@ function normalizeHost(hostname) {
   return hostname.toLowerCase().replace(/\.+$/, "");
 }
 
-// Private-network mode resolves every name and checks the addresses, so mDNS LAN names
-// (mac-studio.local) can pass; .internal (metadata.google.internal) and .localhost cannot.
+// Private-network mode resolves every name and checks the addresses, so an mDNS LAN name
+// (mac-studio.local) passes only if every address it resolves to is allowed; most also
+// resolve to fe80:: and fail, so an IP or Tailscale name is the dependable choice.
+// .internal (metadata.google.internal) and .localhost never pass.
 const PRIVATE_NETWORK_BLOCKED_SUFFIXES = BLOCKED_SUFFIXES.filter((s) => s !== ".local");
 
 function isBlockedHost(host, allowPrivate = false) {
@@ -253,9 +255,10 @@ export async function assertPublicUrlResolved(rawUrl, { failClosed = false, allo
 // maxRedirects hops (fetch's own default following behavior has no bound
 // relevant here since we never let it auto-follow).
 //
-// Like fetch()'s own redirect mode, a hop to another origin drops the credential
-// headers, so an API key sent to the first host is not handed to the redirect target.
-const CREDENTIAL_HEADERS = ["authorization", "proxy-authorization", "x-api-key", "cookie"];
+// A hop to another origin keeps only these headers. Callers send keys under many names
+// (Authorization, x-api-key, X-Subscription-Token …), so an allow-list is the only way
+// to be sure no credential sent to the first host reaches the redirect target.
+const CROSS_ORIGIN_SAFE_HEADERS = new Set(["accept", "accept-language", "content-type", "user-agent"]);
 
 export async function fetchPublic(url, init = {}, { maxRedirects = 5, allowPrivateNetwork = false } = {}) {
   const guard = { failClosed: true, allowPrivateNetwork };
@@ -271,8 +274,10 @@ export async function fetchPublic(url, init = {}, { maxRedirects = 5, allowPriva
     const nextUrl = new URL(location, currentUrl).toString();
     await assertPublicUrlResolved(nextUrl, guard);
     if (new URL(nextUrl).origin !== new URL(currentUrl).origin && hopInit.headers) {
-      const headers = new Headers(hopInit.headers);
-      for (const name of CREDENTIAL_HEADERS) headers.delete(name);
+      const headers = new Headers();
+      for (const [name, value] of new Headers(hopInit.headers)) {
+        if (CROSS_ORIGIN_SAFE_HEADERS.has(name)) headers.set(name, value);
+      }
       hopInit = { ...hopInit, headers };
     }
     currentUrl = nextUrl;

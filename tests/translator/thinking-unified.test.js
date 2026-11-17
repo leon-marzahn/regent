@@ -284,6 +284,10 @@ describe("applyThinking per provider format", () => {
       const on = apply("claude", QWEN, { thinking: { type: "enabled", budget_tokens: 4096 } }, ANTHROPIC_NODE);
       expect(on).toEqual({ thinking: { type: "enabled", budget_tokens: 4096 } });
     });
+    it("always-thinking model on an Anthropic-compatible node: none clamps to the 1024 minimum budget", () => {
+      const out = apply("claude", "MiniMax-M2", { thinking: { type: "disabled" } }, ANTHROPIC_NODE);
+      expect(out).toEqual({ thinking: { type: "enabled", budget_tokens: 1024 } });
+    });
     it("Claude model on an Anthropic-compatible node keeps its adaptive shape", () => {
       const out = apply("claude", "claude-opus-4.7", { reasoning_effort: "high" }, ANTHROPIC_NODE);
       expect(out.output_config).toEqual({ effort: "high" });

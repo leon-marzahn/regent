@@ -125,6 +125,8 @@ function openAIThinkingDisplay(body) {
   return undefined;
 }
 
+const CLAUDE_MIN_BUDGET = 1024;
+
 const NATIVE_ONLY_FORMATS = new Set(["gemini-level", "gemini-budget", "claude-budget", "claude-adaptive", "kiro"]);
 
 // Self-hosted gateways (vLLM/SGLang) validate thinking.budget_tokens; first-party
@@ -336,7 +338,10 @@ function applyFormat(fmt, body, cfg, caps, supportedLevels, display, model = "",
     case "claude-budget": {
       if (none && canDisable) { body.thinking = { type: "disabled" }; break; }
       const budget = toBudget(eff, caps.thinkingRange);
-      body.thinking = budget === -1 ? { type: "enabled", ...(display ? { display } : {}) } : { type: "enabled", budget_tokens: budget || 8192, ...(display ? { display } : {}) };
+      // The Messages API rejects budget_tokens below 1024; "minimal" (and a "none"
+      // clamped to it on always-thinking models) maps to 512.
+      const budgetTokens = budget ? Math.max(budget, CLAUDE_MIN_BUDGET) : 8192;
+      body.thinking = budget === -1 ? { type: "enabled", ...(display ? { display } : {}) } : { type: "enabled", budget_tokens: budgetTokens, ...(display ? { display } : {}) };
       break;
     }
     case "gemini-level": {

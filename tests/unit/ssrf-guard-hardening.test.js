@@ -152,15 +152,16 @@ describe("fetchPublic: redirect-target re-validation from #3714", () => {
       .mockResolvedValueOnce(new Response("ok", { status: 200 }));
 
     await fetchPublic("https://api.example.test/models", {
-      headers: { Authorization: "Bearer k", "x-api-key": "k", Cookie: "s=1", Accept: "application/json" },
+      headers: {
+        Authorization: "Bearer k", "x-api-key": "k", Cookie: "s=1", "X-Subscription-Token": "brave",
+        Accept: "application/json", "Content-Type": "application/json",
+      },
     });
     const sameOrigin = new Headers(global.fetch.mock.calls[1][1].headers);
     expect(sameOrigin.get("authorization")).toBe("Bearer k");
+    expect(sameOrigin.get("x-subscription-token")).toBe("brave");
     const crossOrigin = new Headers(global.fetch.mock.calls[2][1].headers);
-    expect(crossOrigin.get("authorization")).toBeNull();
-    expect(crossOrigin.get("x-api-key")).toBeNull();
-    expect(crossOrigin.get("cookie")).toBeNull();
-    expect(crossOrigin.get("accept")).toBe("application/json");
+    expect([...crossOrigin.keys()].sort()).toEqual(["accept", "content-type"]);
   });
 });
 
