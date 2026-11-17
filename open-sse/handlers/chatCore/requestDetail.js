@@ -2,7 +2,7 @@ import { saveRequestUsage, appendRequestLog, saveRequestDetail } from "@/lib/usa
 import { COLORS } from "../../utils/stream.js";
 import { traceDetail } from "@/lib/requestTrace.js";
 import { canonicalizeUsage } from "../../utils/usageTracking.js";
-import { openaiCacheWriteTokens } from "../../translator/concerns/usage.js";
+import { openaiCacheWriteTokens, reportedUsageCost } from "../../translator/concerns/usage.js";
 import { REQUEST_DETAIL_FIELDS } from "../../config/requestDetailConfig.js";
 
 // Router control headers (x-regent-*, plus the legacy x-9router-* names) the client sent.
@@ -56,7 +56,8 @@ export function extractUsageFromResponse(responseBody) {
       // down the Claude fold branch and add the writes to prompt_tokens twice.
       prompt_tokens_details: responseBody.usage.prompt_tokens_details,
       reasoning_tokens: responseBody.usage.completion_tokens_details?.reasoning_tokens,
-      credits: responseBody.usage.credits
+      credits: responseBody.usage.credits,
+      cost_usd: reportedUsageCost(responseBody.usage)
     };
   }
 

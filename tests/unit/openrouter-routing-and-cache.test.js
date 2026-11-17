@@ -8,7 +8,10 @@ import {
   validateProviderRouting,
 } from "../../open-sse/config/providerRouting.js";
 import { anchorOpenAICache, filterToOpenAIFormat, matchesModelPrefix } from "../../open-sse/translator/formats/openai.js";
-import { canonicalizeUsage } from "../../open-sse/utils/usageTracking.js";
+import { canonicalizeUsage, extractUsage, filterUsageForFormat } from "../../open-sse/utils/usageTracking.js";
+import { reportedUsageCost } from "../../open-sse/translator/concerns/usage.js";
+import { extractUsageFromResponse } from "../../open-sse/handlers/chatCore/requestDetail.js";
+import { calculateCost } from "../../src/lib/db/repos/usageRepo.js";
 import { openAICompletionToClaudeMessage } from "../../open-sse/translator/concerns/claudeMessage.js";
 import { openaiToClaudeResponse } from "../../open-sse/translator/response/openai-to-claude.js";
 import { DefaultExecutor } from "../../open-sse/executors/default.js";
@@ -212,6 +215,36 @@ describe("OpenRouter cache writes (cache_write_tokens) are counted", () => {
 
     const message = openAICompletionToClaudeMessage({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }], usage });
     expect(message.usage).toMatchObject({ input_tokens: 12, cache_creation_input_tokens: 24602 });
+  });
+});
+
+describe("OpenRouter's reported cost is recorded as the request cost", () => {
+  const usage = { prompt_tokens: 15487, completion_tokens: 20, prompt_tokens_details: { cache_write_tokens: 15485 }, cost: 0.077833 };
+
+  it("reads usage.cost, adding the upstream bill for BYOK", () => {
+    expect(reportedUsageCost(usage)).toBe(0.077833);
+    expect(reportedUsageCost({ cost: 0 })).toBe(0);
+    expect(reportedUsageCost({ cost: 0.001, is_byok: true, cost_details: { upstream_inference_cost: 0.02 } })).toBeCloseTo(0.021);
+    expect(reportedUsageCost({ cost: 0.001, is_byok: false, cost_details: { upstream_inference_cost: 0.02 } })).toBe(0.001);
+    for (const bad of [{}, { cost: null }, { cost: -1 }, { cost: "x" }, null]) expect(reportedUsageCost(bad)).toBeUndefined();
+  });
+
+  it("survives extraction and canonicalization, streamed and not", () => {
+    const fromChunk = canonicalizeUsage(extractUsage({ choices: [], usage }));
+    const fromBody = canonicalizeUsage(extractUsageFromResponse({ choices: [{ message: { content: "OK" } }], usage }));
+    for (const t of [fromChunk, fromBody]) expect(t).toMatchObject({ cost_usd: 0.077833, cache_creation_input_tokens: 15485 });
+
+    const state = {};
+    openaiToClaudeResponse({ choices: [], usage }, state);
+    expect(state.usage.cost_usd).toBe(0.077833);
+    expect(filterUsageForFormat(state.usage, "claude").cost_usd).toBeUndefined();
+  });
+
+  it("is preferred over the price table, only for providers that report billed USD", async () => {
+    const tokens = { prompt_tokens: 15487, completion_tokens: 20, cache_creation_input_tokens: 15485, cost_usd: 0.077833 };
+    expect(await calculateCost("openrouter", "anthropic/claude-opus-5.5", tokens)).toBe(0.077833);
+    expect(await calculateCost("openrouter", "anthropic/claude-opus-5.5", { ...tokens, cost_usd: 0 })).toBe(0);
+    expect(await calculateCost("groq", "anthropic/claude-opus-5.5", tokens)).not.toBe(0.077833);
   });
 });
 

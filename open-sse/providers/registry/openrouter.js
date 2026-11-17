@@ -29,7 +29,8 @@ export default {
     // providerRouting: per-connection `provider` object (only/order/ignore/allow_fallbacks).
     // autoCacheBreakpoints: Anthropic models cache only up to explicit breakpoints, so a
     // client that sends none (most OpenAI-format clients) gets them added.
-    quirks: { preserveCacheControl: true, providerRouting: true, autoCacheBreakpoints: ["anthropic/"] },
+    // reportsUsageCost: usage.cost is the USD OpenRouter billed; it is recorded as the cost.
+    quirks: { preserveCacheControl: true, providerRouting: true, autoCacheBreakpoints: ["anthropic/"], reportsUsageCost: true },
   },
   models: [
     { id: "openai/text-embedding-3-large", name: "OpenAI Text Embedding 3 Large", kind: "embedding" },

@@ -247,6 +247,7 @@ function compactTokens(t) {
     cacheWrite: num(t.cache_creation_input_tokens) ?? num(openaiCacheWriteTokens(t.prompt_tokens_details)),
     reasoning: num(t.reasoning_tokens) ?? num(t.completion_tokens_details?.reasoning_tokens),
     credits: num(t.credits),
+    costUsd: num(t.cost_usd),
   };
   for (const k of Object.keys(out)) if (out[k] === undefined) delete out[k];
   return Object.keys(out).length ? out : undefined;

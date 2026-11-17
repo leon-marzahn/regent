@@ -3,7 +3,7 @@
  */
 
 import { FORMATS } from "../translator/formats.js";
-import { openaiCacheWriteTokens } from "../translator/concerns/usage.js";
+import { openaiCacheWriteTokens, reportedUsageCost } from "../translator/concerns/usage.js";
 
 // Legacy per-chunk usage console line; off by default (superseded by "📊 done")
 const DEBUG_USAGE = process.env.LOG_USAGE_VERBOSE === "1";
@@ -139,6 +139,8 @@ export function normalizeUsage(usage) {
   assignNumber("reasoning_tokens", usage?.reasoning_tokens);
   // Kiro reports spend in credits (meteringEvent) instead of cache counts; keep it for the usage page.
   assignNumber("credits", usage?.credits);
+  // USD an aggregator reported for the request (OpenRouter); preferred over a price-table guess.
+  assignNumber("cost_usd", usage?.cost_usd);
 
   // Preserve nested details objects for OpenAI format forwarding
   if (usage?.prompt_tokens_details && typeof usage.prompt_tokens_details === "object") {
@@ -216,6 +218,9 @@ export function canonicalizeUsage(usage) {
   if (reasoning > 0) result.reasoning_tokens = reasoning;
   const creditsValue = num(usage.credits);
   if (creditsValue > 0) result.credits = creditsValue;
+  // 0 is a real reported cost (free models), so only absence is skipped.
+  const costUsd = Number(usage.cost_usd);
+  if (usage.cost_usd != null && Number.isFinite(costUsd) && costUsd >= 0) result.cost_usd = costUsd;
   return result;
 }
 
@@ -294,6 +299,7 @@ export function extractUsage(chunk) {
       cached_tokens: chunk.usage.prompt_tokens_details?.cached_tokens || chunk.usage.prompt_cache_hit_tokens,
       reasoning_tokens: chunk.usage.completion_tokens_details?.reasoning_tokens,
       credits: chunk.usage.credits,
+      cost_usd: reportedUsageCost(chunk.usage),
       prompt_tokens_details: chunk.usage.prompt_tokens_details,
       completion_tokens_details: chunk.usage.completion_tokens_details
     });

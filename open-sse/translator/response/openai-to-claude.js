@@ -3,7 +3,7 @@ import { FORMATS } from "../formats.js";
 import { ROLE, CLAUDE_BLOCK, MODEL_FALLBACK } from "../schema/index.js";
 import { fromOpenAIFinish } from "../concerns/finishReason.js";
 import { extractReasoningText } from "../concerns/reasoning.js";
-import { openaiCacheWriteTokens } from "../concerns/usage.js";
+import { openaiCacheWriteTokens, reportedUsageCost } from "../concerns/usage.js";
 
 // Legacy "proxy_" prefix used by older request translators. Response strips it
 // defensively so tool names from such turns resolve back (e.g. proxy_Read → Read
@@ -102,6 +102,11 @@ export function openaiToClaudeResponse(chunk, state) {
     if (cacheCreateTokens > 0) {
       state.usage.cache_creation_input_tokens = cacheCreateTokens;
     }
+
+    // Reported USD (OpenRouter) for the usage record; filterUsageForFormat keeps it off
+    // the Claude client's usage.
+    const costUsd = reportedUsageCost(chunk.usage);
+    if (costUsd !== undefined) state.usage.cost_usd = costUsd;
 
     // Note: completion_tokens_details.reasoning_tokens is already included in output_tokens
     // No need to add separately as Claude expects total output_tokens
