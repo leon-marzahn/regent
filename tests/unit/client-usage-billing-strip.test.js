@@ -59,6 +59,8 @@ function openRouterUpstream(_url, init) {
   return new Response(text, { headers: { "content-type": "text/event-stream" } });
 }
 
+// sourceFormat as the routes set it from the endpoint (src/sse/handlers/chat.js);
+// body detection alone reads a plain /v1/messages body as OpenAI.
 const CLIENTS = {
   openai: {
     endpoint: "/v1/chat/completions",
@@ -71,6 +73,7 @@ const CLIENTS = {
   },
   claude: {
     endpoint: "/v1/messages",
+    sourceFormat: "claude",
     body: (stream) => ({
       model: MODEL,
       stream,
@@ -80,6 +83,7 @@ const CLIENTS = {
   },
   responses: {
     endpoint: "/v1/responses",
+    sourceFormat: "openai-responses",
     body: (stream) => ({
       model: MODEL,
       stream,
@@ -92,16 +96,17 @@ const CLIENTS = {
   },
 };
 
-async function run({ client, stream, provider = "openrouter" }) {
+async function run({ client, stream, provider = "openrouter", model = MODEL }) {
   const c = CLIENTS[client];
-  const body = c.body(stream);
+  const body = { ...c.body(stream), model };
   const result = await handleChatCore({
     body,
-    modelInfo: { provider, model: MODEL },
+    modelInfo: { provider, model },
     credentials: { apiKey: "sk-test-fake" },
     clientRawRequest: { endpoint: c.endpoint, body, headers: {} },
     connectionId: "conn-test",
     apiKey: "sk-client-test",
+    sourceFormatOverride: c.sourceFormat,
   });
   expect(result.success).toBe(true);
   const text = await result.response.text();
@@ -183,6 +188,156 @@ describe("OpenRouter billing fields never reach the client", () => {
       total_tokens: 5003,
     });
     expect(recorded()).toMatchObject({ prompt_tokens: 5000, completion_tokens: 3 });
+  });
+});
+
+const sse = (events) =>
+  new Response(
+    events
+      .map(
+        (data) => (data.type ? `event: ${data.type}\n` : "") + `data: ${JSON.stringify(data)}\n\n`,
+      )
+      .join(""),
+    { headers: { "content-type": "text/event-stream" } },
+  );
+const dataLines = (text) =>
+  text
+    .split("\n")
+    .filter((l) => l.startsWith("data: {"))
+    .map((l) => JSON.parse(l.slice(6)));
+
+describe("same-format passthrough keeps the provider's own usage fields", () => {
+  it("Claude client -> Anthropic: drops cost, keeps cache_creation, server_tool_use, service_tier", async () => {
+    const startUsage = {
+      input_tokens: 10,
+      output_tokens: 1,
+      cache_read_input_tokens: 4000,
+      cache_creation_input_tokens: 900,
+      cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 900 },
+      service_tier: "standard",
+    };
+    const deltaUsage = {
+      input_tokens: 10,
+      output_tokens: 3,
+      cache_read_input_tokens: 4000,
+      cache_creation_input_tokens: 900,
+      server_tool_use: { web_search_requests: 2 },
+    };
+    fetchMock.mockImplementation(() =>
+      sse([
+        {
+          type: "message_start",
+          message: {
+            id: "msg_1",
+            type: "message",
+            role: "assistant",
+            model: "claude-opus-5-5",
+            content: [],
+            stop_reason: null,
+            usage: { ...startUsage, ...BILLING },
+          },
+        },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { ...deltaUsage, ...BILLING },
+        },
+        { type: "message_stop" },
+      ]),
+    );
+    const text = await run({
+      client: "claude",
+      stream: true,
+      provider: "anthropic",
+      model: "claude-opus-5-5",
+    });
+    expect(text).not.toMatch(LEAK);
+    const events = dataLines(text);
+    expect(events.find((e) => e.type === "message_start").message.usage).toEqual(startUsage);
+    expect(events.find((e) => e.type === "message_delta").usage).toEqual(deltaUsage);
+    expect(recorded()).toMatchObject({ completion_tokens: 3, cached_tokens: 4000 });
+  });
+
+  it("Gemini client -> Gemini: drops cost, keeps promptTokensDetails and trafficType", async () => {
+    const usageMetadata = {
+      promptTokenCount: 10,
+      candidatesTokenCount: 3,
+      totalTokenCount: 13,
+      promptTokensDetails: [{ modality: "TEXT", tokenCount: 10 }],
+      trafficType: "ON_DEMAND",
+    };
+    fetchMock.mockImplementation(() =>
+      sse([
+        { candidates: [{ content: { role: "model", parts: [{ text: "ok" }] }, index: 0 }] },
+        {
+          candidates: [
+            { content: { role: "model", parts: [{ text: "" }] }, finishReason: "STOP", index: 0 },
+          ],
+          usageMetadata: { ...usageMetadata, ...BILLING },
+        },
+      ]),
+    );
+    const text = await run({
+      client: "gemini",
+      stream: true,
+      provider: "gemini",
+      model: "gemini-3-pro",
+    });
+    expect(text).not.toMatch(LEAK);
+    expect(dataLines(text).find((e) => e.usageMetadata).usageMetadata).toEqual(usageMetadata);
+    expect(recorded()).toMatchObject({ prompt_tokens: 10, completion_tokens: 3 });
+  });
+
+  it("Responses client -> Responses provider: response.completed drops cost, keeps total_tokens", async () => {
+    const usage = {
+      input_tokens: 10,
+      output_tokens: 3,
+      total_tokens: 13,
+      input_tokens_details: { cached_tokens: 4 },
+      output_tokens_details: { reasoning_tokens: 0 },
+    };
+    const response = {
+      id: "resp_1",
+      object: "response",
+      status: "completed",
+      model: "sonar",
+      output: [
+        {
+          type: "message",
+          id: "m1",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "ok", annotations: [] }],
+        },
+      ],
+    };
+    fetchMock.mockImplementation(() =>
+      sse([
+        { type: "response.created", response: { ...response, status: "in_progress", output: [] } },
+        {
+          type: "response.output_text.delta",
+          item_id: "m1",
+          output_index: 0,
+          content_index: 0,
+          delta: "ok",
+        },
+        { type: "response.completed", response: { ...response, usage: { ...usage, ...BILLING } } },
+      ]),
+    );
+    const text = await run({
+      client: "responses",
+      stream: true,
+      provider: "perplexity-agent",
+      model: "sonar",
+    });
+    expect(text).not.toMatch(LEAK);
+    expect(dataLines(text).find((e) => e.type === "response.completed").response.usage).toEqual(
+      usage,
+    );
+    expect(recorded()).toMatchObject({ prompt_tokens: 10, completion_tokens: 3 });
   });
 });
 

@@ -80,11 +80,16 @@ export function filterUsageForFormat(usage, targetFormat) {
     [FORMATS.CLAUDE]: [
       'input_tokens', 'output_tokens', 
       'cache_read_input_tokens', 'cache_creation_input_tokens',
+      // Anthropic's own breakdowns (5m/1h cache writes, web search requests):
+      // native Claude passthrough clients (Claude Code) price turns from them.
+      'cache_creation', 'server_tool_use', 'service_tier',
       'estimated'
     ],
     [FORMATS.GEMINI]: [
       'promptTokenCount', 'candidatesTokenCount', 'totalTokenCount',
       'cachedContentTokenCount', 'thoughtsTokenCount',
+      'promptTokensDetails', 'candidatesTokensDetails', 'cacheTokensDetails',
+      'toolUsePromptTokenCount', 'trafficType',
       'estimated'
     ],
     [FORMATS.OPENAI_RESPONSES]: [
