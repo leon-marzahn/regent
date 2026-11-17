@@ -246,6 +246,55 @@ describe("applyThinking per provider format", () => {
     expect(out.generationConfig).toBeUndefined();
     expect(out.thinkingConfig).toBeUndefined();
   });
+  describe("custom compat nodes speak their wire's thinking shape, not the model vendor's", () => {
+    const OPENAI_NODE = "openai-compatible-chat-mac-studio";
+    const ANTHROPIC_NODE = "anthropic-compatible-relay";
+    const QWEN = "qwen3.8-27b-heretic-abliterated-uncensored";
+
+    it("qwen model on an OpenAI-compatible node: reasoning_effort none passes through (LM Studio)", () => {
+      const out = apply("openai", QWEN, { reasoning_effort: "none" }, OPENAI_NODE);
+      expect(out.reasoning_effort).toBe("none");
+      expect(out.enable_thinking).toBeUndefined();
+      expect(out.thinking_budget).toBeUndefined();
+    });
+    it("qwen model on an OpenAI-compatible node: a level passes through", () => {
+      const out = apply("openai", QWEN, { reasoning_effort: "low" }, OPENAI_NODE);
+      expect(out).toEqual({ reasoning_effort: "low" });
+    });
+    it("qwen model on a Responses-type OpenAI-compatible node", () => {
+      const out = apply("openai-responses", QWEN, { reasoning: { effort: "none" } }, "openai-compatible-responses-x");
+      expect(out.enable_thinking).toBeUndefined();
+    });
+    it.each([
+      ["glm-5.2", "high"],
+      ["kimi-k2.5-instruct", "medium"],
+      ["minimax-m3", "low"],
+      ["hunyuan-t2", "high"],
+    ])("%s on an OpenAI-compatible node → reasoning_effort %s, no vendor fields", (model, effort) => {
+      const out = apply("openai", model, { reasoning_effort: effort }, OPENAI_NODE);
+      expect(out).toEqual({ reasoning_effort: effort });
+    });
+    it("glm on an OpenAI-compatible node: none stays reasoning_effort none", () => {
+      const out = apply("openai", "glm-4.7", { reasoning_effort: "none" }, OPENAI_NODE);
+      expect(out).toEqual({ reasoning_effort: "none" });
+    });
+    it("qwen model on an Anthropic-compatible node → Claude thinking, not enable_thinking", () => {
+      const off = apply("claude", QWEN, { thinking: { type: "disabled" } }, ANTHROPIC_NODE);
+      expect(off).toEqual({ thinking: { type: "disabled" } });
+      const on = apply("claude", QWEN, { thinking: { type: "enabled", budget_tokens: 4096 } }, ANTHROPIC_NODE);
+      expect(on).toEqual({ thinking: { type: "enabled", budget_tokens: 4096 } });
+    });
+    it("Claude model on an Anthropic-compatible node keeps its adaptive shape", () => {
+      const out = apply("claude", "claude-opus-4.7", { reasoning_effort: "high" }, ANTHROPIC_NODE);
+      expect(out.output_config).toEqual({ effort: "high" });
+      expect(out.thinking).toEqual({ type: "adaptive" });
+    });
+    it("named qwen provider keeps the DashScope shape", () => {
+      const out = apply("openai", QWEN, { reasoning_effort: "none" }, "alims-intl");
+      expect(out.enable_thinking).toBe(false);
+      expect(out.reasoning_effort).toBeUndefined();
+    });
+  });
   it("Gemini model over its native format (antigravity/gemini-cli/vertex) still gets generationConfig", () => {
     const out = apply("gemini-cli", "gemini-3.5-flash-lite", { reasoning_effort: "medium" }, "gemini-cli");
     expect(out.generationConfig.thinkingConfig.thinkingLevel).toBe("medium");
