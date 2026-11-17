@@ -1,4 +1,10 @@
 
+# v102.5.3 (2026-11-17)
+
+## Fixes
+- **claude**: Send a plain UUID as the Claude Code session id, like Claude Code itself, instead of the uuid+timestamp fallback or a client's raw `ses_…` id (#178)
+- **claude**: Stop a client-supplied session id from being pasted unescaped into the `metadata.user_id` JSON (#178)
+
 # v102.5.2 (2026-11-17)
 
 ## Fixes
