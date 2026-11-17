@@ -39,8 +39,23 @@ describe("applyCloaking session_id", () => {
     expect(sessionOf(undefined)).toMatch(UUID_RE);
   });
 
-  it("leaves a client-supplied metadata.user_id untouched", () => {
+  it("leaves a client's Claude Code user_id with a UUID session untouched", () => {
+    const userId = '{"device_id":"d","account_uuid":"a","session_id":"9e8f7b8f-0939-4b0b-a2cf-059f387c7334"}';
+    const body = applyCloaking({ messages: [], metadata: { user_id: userId } }, "sk-ant-oat-test", "x");
+    expect(body.metadata.user_id).toBe(userId);
+  });
+
+  it("maps only the session_id of a client's JSON user_id when it isn't a UUID", () => {
     const userId = '{"device_id":"d","account_uuid":"a","session_id":"sess-abc"}';
+    const body = applyCloaking({ messages: [], metadata: { user_id: userId } }, "sk-ant-oat-test", "x");
+    const parsed = JSON.parse(body.metadata.user_id);
+    expect(parsed).toMatchObject({ device_id: "d", account_uuid: "a" });
+    expect(parsed.session_id).toMatch(UUID_RE);
+    expect(parsed.session_id).toBe(sessionOf("sess-abc"));
+  });
+
+  it("passes a non-JSON (legacy) client user_id through unchanged", () => {
+    const userId = "user_abc_account_x_session_9e8f7b8f-0939-4b0b-a2cf-059f387c7334";
     const body = applyCloaking({ messages: [], metadata: { user_id: userId } }, "sk-ant-oat-test", "x");
     expect(body.metadata.user_id).toBe(userId);
   });

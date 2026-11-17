@@ -245,7 +245,24 @@ export function applyCloaking(body, apiKey, sessionId) {
   const existingUserId = result.metadata?.user_id;
   if (!existingUserId) {
     result.metadata = { ...result.metadata, user_id: generateFakeUserID(sessionId, apiKey) };
+  } else {
+    const normalized = withUuidSession(existingUserId);
+    if (normalized !== existingUserId) result.metadata = { ...result.metadata, user_id: normalized };
   }
 
   return result;
+}
+
+// A client's JSON user_id (Claude Code format) keeps its own ids; only a session_id that
+// isn't a UUID is mapped to one. Other formats (e.g. legacy Claude Code strings) pass as-is.
+function withUuidSession(userId) {
+  if (typeof userId !== "string" || userId[0] !== "{") return userId;
+  try {
+    const parsed = JSON.parse(userId);
+    const sid = parsed?.session_id;
+    if (typeof sid !== "string" || UUID_RE.test(sid)) return userId;
+    return JSON.stringify({ ...parsed, session_id: toSessionUuid(sid) });
+  } catch {
+    return userId;
+  }
 }
