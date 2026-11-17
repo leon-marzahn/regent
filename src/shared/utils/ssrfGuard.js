@@ -48,17 +48,36 @@ const BLOCKED_V4_RANGES = [
   [ipv4ToInt("192.168.0.0"), 16],
 ];
 
-function isBlockedIpv4Int(ip) {
-  return BLOCKED_V4_RANGES.some(([base, bits]) => {
+// Private-network mode (allowPrivateNetwork): the LAN and Tailscale ranges a signed-in
+// admin may reach when testing their own endpoint. Loopback, 0/8 and link-local
+// (169.254.169.254 metadata) stay blocked in every mode. 100.100.100.0/24 is carved out
+// of the CGNAT range: Alibaba Cloud's metadata service is 100.100.100.200 and Tailscale
+// keeps that /24 for its own services, never for nodes.
+const PRIVATE_NETWORK_V4_RANGES = [
+  [ipv4ToInt("10.0.0.0"), 8],
+  [ipv4ToInt("100.64.0.0"), 10],
+  [ipv4ToInt("172.16.0.0"), 12],
+  [ipv4ToInt("192.168.0.0"), 16],
+];
+const PRIVATE_NETWORK_V4_EXCLUDED = [[ipv4ToInt("100.100.100.0"), 24]];
+
+function inV4Ranges(ip, ranges) {
+  return ranges.some(([base, bits]) => {
     const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
     return (ip & mask) === (base & mask);
   });
 }
 
-function isBlockedIpv4(host) {
+function isBlockedIpv4Int(ip, allowPrivate = false) {
+  if (!inV4Ranges(ip, BLOCKED_V4_RANGES)) return false;
+  if (!allowPrivate) return true;
+  return !inV4Ranges(ip, PRIVATE_NETWORK_V4_RANGES) || inV4Ranges(ip, PRIVATE_NETWORK_V4_EXCLUDED);
+}
+
+function isBlockedIpv4(host, allowPrivate = false) {
   const ip = ipv4ToInt(host);
   if (ip === null) return false;
-  return isBlockedIpv4Int(ip);
+  return isBlockedIpv4Int(ip, allowPrivate);
 }
 
 function parseHextets(s) {
@@ -116,7 +135,7 @@ function parseIPv6ToGroups(rawHost) {
   return groups.length === 8 ? groups : null;
 }
 
-function isBlockedIpv6Groups(g) {
+function isBlockedIpv6Groups(g, allowPrivate = false) {
   const isZero = (n) => g[n] === 0;
   // loopback ::1
   if ([0, 1, 2, 3, 4, 5, 6].every(isZero) && g[7] === 1) return true;
@@ -124,18 +143,21 @@ function isBlockedIpv6Groups(g) {
   if (g.every((x) => x === 0)) return true;
   // link-local fe80::/10
   if ((g[0] & 0xffc0) === 0xfe80) return true;
-  // unique local fc00::/7
-  if ((g[0] & 0xfe00) === 0xfc00) return true;
+  // unique local fc00::/7. Private-network mode admits only Tailscale's fd7a:115c:a1e0::/48:
+  // cloud metadata also lives in ULA space (AWS fd00:ec2::254, GCP fd20:ce::254).
+  if ((g[0] & 0xfe00) === 0xfc00) {
+    return !(allowPrivate && g[0] === 0xfd7a && g[1] === 0x115c && g[2] === 0xa1e0);
+  }
   // IPv4-mapped ::ffff:0:0/96 (0:0:0:0:0:ffff:a.b.c.d — the 0xffff marker is
   // group index 5) and NAT64 well-known prefix 64:ff9b::/96 — both embed a
   // real IPv4 address in the low 32 bits; check it against the same IPv4
   // blocklist regardless of which prefix wraps it.
   const low32 = ((g[6] << 16) | g[7]) >>> 0;
-  if ([0, 1, 2, 3, 4].every(isZero) && g[5] === 0xffff) return isBlockedIpv4Int(low32);
-  if (g[0] === 0x0064 && g[1] === 0xff9b && [2, 3, 4, 5].every(isZero)) return isBlockedIpv4Int(low32);
+  if ([0, 1, 2, 3, 4].every(isZero) && g[5] === 0xffff) return isBlockedIpv4Int(low32, allowPrivate);
+  if (g[0] === 0x0064 && g[1] === 0xff9b && [2, 3, 4, 5].every(isZero)) return isBlockedIpv4Int(low32, allowPrivate);
   // IPv4-compatible ::a.b.c.d/96 (deprecated, still parseable) — excludes :: and ::1
   // which already matched above.
-  if ([0, 1, 2, 3, 4, 5].every(isZero) && low32 !== 0 && low32 !== 1) return isBlockedIpv4Int(low32);
+  if ([0, 1, 2, 3, 4, 5].every(isZero) && low32 !== 0 && low32 !== 1) return isBlockedIpv4Int(low32, allowPrivate);
   return false;
 }
 
@@ -159,13 +181,18 @@ function normalizeHost(hostname) {
   return hostname.toLowerCase().replace(/\.+$/, "");
 }
 
-function isBlockedHost(host) {
+// Private-network mode resolves every name and checks the addresses, so mDNS LAN names
+// (mac-studio.local) can pass; .internal (metadata.google.internal) and .localhost cannot.
+const PRIVATE_NETWORK_BLOCKED_SUFFIXES = BLOCKED_SUFFIXES.filter((s) => s !== ".local");
+
+function isBlockedHost(host, allowPrivate = false) {
   if (BLOCKED_HOSTNAMES.has(host)) return true;
-  if (BLOCKED_SUFFIXES.some((s) => host.endsWith(s))) return true;
-  if (isBlockedIpv4(host)) return true;
+  const suffixes = allowPrivate ? PRIVATE_NETWORK_BLOCKED_SUFFIXES : BLOCKED_SUFFIXES;
+  if (suffixes.some((s) => host.endsWith(s))) return true;
+  if (isBlockedIpv4(host, allowPrivate)) return true;
   if (host.includes(":")) {
     const groups = parseIPv6ToGroups(host.replace(/^\[|\]$/g, ""));
-    if (groups && isBlockedIpv6Groups(groups)) return true;
+    if (groups && isBlockedIpv6Groups(groups, allowPrivate)) return true;
   }
   return false;
 }
@@ -186,10 +213,15 @@ export function assertPublicUrl(rawUrl) {
 // failClosed: reject a hostname that does not resolve locally. fetchPublic uses
 // it because its request may go through a proxy that resolves names itself: a
 // name only the proxy knows (split-horizon DNS) would otherwise skip the check.
-export async function assertPublicUrlResolved(rawUrl, { failClosed = false } = {}) {
+//
+// allowPrivateNetwork: also admit LAN and Tailscale addresses (PRIVATE_NETWORK_V4_RANGES,
+// Tailscale IPv6). Only for a caller already trusted to point the server at its own
+// network, such as a signed-in admin testing a custom endpoint. Loopback, link-local and
+// cloud metadata stay blocked.
+export async function assertPublicUrlResolved(rawUrl, { failClosed = false, allowPrivateNetwork = false } = {}) {
   const parsed = new URL(rawUrl);
   const host = normalizeHost(parsed.hostname);
-  if (isBlockedHost(host)) throw new Error("Blocked URL: internal host");
+  if (isBlockedHost(host, allowPrivateNetwork)) throw new Error("Blocked URL: internal host");
 
   // Already a literal IPv4/IPv6 address — isBlockedHost above already covered it,
   // no DNS lookup applies (and dns.lookup would just echo it back anyway).
@@ -206,7 +238,10 @@ export async function assertPublicUrlResolved(rawUrl, { failClosed = false } = {
     return;
   }
   for (const { address, family } of addresses) {
-    if (family === 4 ? isBlockedIpv4(address) : isBlockedIpv6Groups(parseIPv6ToGroups(address) || [])) {
+    const blocked = family === 4
+      ? isBlockedIpv4(address, allowPrivateNetwork)
+      : isBlockedIpv6Groups(parseIPv6ToGroups(address) || [], allowPrivateNetwork);
+    if (blocked) {
       throw new Error("Blocked URL: hostname resolves to an internal host");
     }
   }
@@ -217,17 +252,29 @@ export async function assertPublicUrlResolved(rawUrl, { failClosed = false } = {
 // validated public URL can't 30x its way to an internal target. Bounded to
 // maxRedirects hops (fetch's own default following behavior has no bound
 // relevant here since we never let it auto-follow).
-export async function fetchPublic(url, init = {}, { maxRedirects = 5 } = {}) {
-  await assertPublicUrlResolved(url, { failClosed: true });
+//
+// Like fetch()'s own redirect mode, a hop to another origin drops the credential
+// headers, so an API key sent to the first host is not handed to the redirect target.
+const CREDENTIAL_HEADERS = ["authorization", "proxy-authorization", "x-api-key", "cookie"];
+
+export async function fetchPublic(url, init = {}, { maxRedirects = 5, allowPrivateNetwork = false } = {}) {
+  const guard = { failClosed: true, allowPrivateNetwork };
+  await assertPublicUrlResolved(url, guard);
   let currentUrl = url;
+  let hopInit = init;
   for (let hop = 0; ; hop++) {
-    const res = await fetch(currentUrl, { ...init, redirect: "manual" });
+    const res = await fetch(currentUrl, { ...hopInit, redirect: "manual" });
     const isRedirect = res.status >= 300 && res.status < 400;
     const location = isRedirect ? res.headers.get("location") : null;
     if (!location) return res;
     if (hop >= maxRedirects) throw new Error("Blocked URL: too many redirects");
     const nextUrl = new URL(location, currentUrl).toString();
-    await assertPublicUrlResolved(nextUrl, { failClosed: true });
+    await assertPublicUrlResolved(nextUrl, guard);
+    if (new URL(nextUrl).origin !== new URL(currentUrl).origin && hopInit.headers) {
+      const headers = new Headers(hopInit.headers);
+      for (const name of CREDENTIAL_HEADERS) headers.delete(name);
+      hopInit = { ...hopInit, headers };
+    }
     currentUrl = nextUrl;
   }
 }
