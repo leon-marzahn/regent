@@ -1,4 +1,11 @@
 
+# v102.5.2 (2026-11-17)
+
+## Fixes
+- **translator**: Send custom endpoints the thinking shape their protocol uses, so `reasoning_effort: "none"` turns thinking off for qwen/glm/kimi-named models on LM Studio, vLLM and llama-server (#176)
+- **provider-nodes**: Let signed-in admins test LAN and Tailscale endpoints with "Test first"; loopback and cloud metadata stay blocked (#176)
+- **ssrf**: Keep only safe headers on a cross-origin redirect hop (#176)
+
 # v102.5.1 (2026-11-17)
 
 ## Fixes
