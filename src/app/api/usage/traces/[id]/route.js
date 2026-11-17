@@ -35,6 +35,7 @@ export async function GET(_request, { params }) {
         cache_creation_input_tokens: t.cacheWrite,
         reasoning_tokens: t.reasoning,
         credits: t.credits,
+        cost_usd: t.costUsd,
       }).catch(() => 0);
     }
     return NextResponse.json({ ...trace, attempts, cost }, { headers: { "Cache-Control": "private, no-store" } });

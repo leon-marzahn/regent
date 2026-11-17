@@ -132,8 +132,9 @@ describe("OpenRouter billing fields never reach the client", () => {
       completion_tokens: 3,
       total_tokens: 5003,
     });
-    // Recording still sees the upstream's real counts.
+    // Recording still sees the upstream's real counts and its billed cost (BYOK: fee + upstream).
     expect(recorded()).toMatchObject({ prompt_tokens: 5000, completion_tokens: 3 });
+    expect(recorded().cost_usd).toBeCloseTo(0.0105, 10);
   });
 
   it.each([

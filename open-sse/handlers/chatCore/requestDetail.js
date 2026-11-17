@@ -2,6 +2,7 @@ import { saveRequestUsage, appendRequestLog, saveRequestDetail } from "@/lib/usa
 import { COLORS } from "../../utils/stream.js";
 import { traceDetail } from "@/lib/requestTrace.js";
 import { canonicalizeUsage } from "../../utils/usageTracking.js";
+import { openaiCacheWriteTokens, reportedUsageCost } from "../../translator/concerns/usage.js";
 import { REQUEST_DETAIL_FIELDS } from "../../config/requestDetailConfig.js";
 
 // Router control headers (x-regent-*, plus the legacy x-9router-* names) the client sent.
@@ -50,8 +51,13 @@ export function extractUsageFromResponse(responseBody) {
       prompt_tokens: responseBody.usage.prompt_tokens || 0,
       completion_tokens: responseBody.usage.completion_tokens || 0,
       cached_tokens: responseBody.usage.cached_tokens ?? responseBody.usage.prompt_tokens_details?.cached_tokens,
+      // canonicalizeUsage reads cache writes from here (cache_creation_tokens / OpenRouter's
+      // cache_write_tokens). Not lifted to cache_creation_input_tokens: that would send it
+      // down the Claude fold branch and add the writes to prompt_tokens twice.
+      prompt_tokens_details: responseBody.usage.prompt_tokens_details,
       reasoning_tokens: responseBody.usage.completion_tokens_details?.reasoning_tokens,
-      credits: responseBody.usage.credits
+      credits: responseBody.usage.credits,
+      cost_usd: reportedUsageCost(responseBody.usage)
     };
   }
 
@@ -119,7 +125,7 @@ export function formatDoneLine({ usage, latency }) {
   const inTok = u.prompt_tokens ?? u.input_tokens ?? 0;
   const outTok = u.completion_tokens ?? u.output_tokens ?? 0;
   const cacheRead = u.cache_read_input_tokens ?? u.cached_tokens ?? u.prompt_tokens_details?.cached_tokens ?? 0;
-  const cacheCreate = u.cache_creation_input_tokens ?? 0;
+  const cacheCreate = u.cache_creation_input_tokens ?? openaiCacheWriteTokens(u.prompt_tokens_details) ?? 0;
   let inStr = `IN ${inTok}`;
   if (cacheRead || cacheCreate) {
     const parts = [];
