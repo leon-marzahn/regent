@@ -80,15 +80,20 @@ export function filterUsageForFormat(usage, targetFormat) {
     [FORMATS.CLAUDE]: [
       'input_tokens', 'output_tokens', 
       'cache_read_input_tokens', 'cache_creation_input_tokens',
+      // Anthropic's own breakdowns (5m/1h cache writes, web search requests):
+      // native Claude passthrough clients (Claude Code) price turns from them.
+      'cache_creation', 'server_tool_use', 'service_tier',
       'estimated'
     ],
     [FORMATS.GEMINI]: [
       'promptTokenCount', 'candidatesTokenCount', 'totalTokenCount',
       'cachedContentTokenCount', 'thoughtsTokenCount',
+      'promptTokensDetails', 'candidatesTokensDetails', 'cacheTokensDetails',
+      'toolUsePromptTokenCount', 'trafficType',
       'estimated'
     ],
     [FORMATS.OPENAI_RESPONSES]: [
-      'input_tokens', 'output_tokens',
+      'input_tokens', 'output_tokens', 'total_tokens',
       'input_tokens_details', 'output_tokens_details',
       'estimated'
     ],
@@ -115,6 +120,49 @@ export function filterUsageForFormat(usage, targetFormat) {
   }
 
   return pickFields(fields);
+}
+
+// filterUsageForFormat when it would drop a field, else the same object.
+function filteredOrSame(usage, format) {
+  if (!usage || typeof usage !== "object") return usage;
+  const filtered = filterUsageForFormat(usage, format);
+  return Object.keys(filtered).length === Object.keys(usage).length ? usage : filtered;
+}
+
+/**
+ * The chunk as a client may see it: every usage object it carries keeps only
+ * the fields filterUsageForFormat allows for that object's format, so upstream
+ * billing data (OpenRouter's cost, is_byok, cost_details, ...) never leaves
+ * regent. Call it after usage was extracted for recording. Returns the same
+ * chunk when nothing is dropped; never mutates it.
+ */
+export function stripClientUsage(chunk) {
+  if (!chunk || typeof chunk !== "object") return chunk;
+  let out = chunk;
+  const set = (key, value) => {
+    if (value === out[key]) return;
+    if (out === chunk) out = { ...chunk };
+    out[key] = value;
+  };
+
+  // Claude events (message_delta) carry Claude usage; everything else at the top level is Chat Completions.
+  const topFormat = typeof chunk.type === "string" && chunk.type.startsWith("message") ? FORMATS.CLAUDE : FORMATS.OPENAI;
+  set("usage", filteredOrSame(chunk.usage, topFormat));
+  set("usageMetadata", filteredOrSame(chunk.usageMetadata, FORMATS.GEMINI));
+
+  if (chunk.message && typeof chunk.message === "object" && chunk.message.usage) {
+    const usage = filteredOrSame(chunk.message.usage, FORMATS.CLAUDE);
+    if (usage !== chunk.message.usage) set("message", { ...chunk.message, usage });
+  }
+  if (chunk.response && typeof chunk.response === "object") {
+    let response = chunk.response;
+    const usage = filteredOrSame(response.usage, FORMATS.OPENAI_RESPONSES);
+    if (usage !== response.usage) response = { ...response, usage };
+    const usageMetadata = filteredOrSame(response.usageMetadata, FORMATS.GEMINI);
+    if (usageMetadata !== response.usageMetadata) response = { ...response, usageMetadata };
+    set("response", response);
+  }
+  return out;
 }
 
 /**

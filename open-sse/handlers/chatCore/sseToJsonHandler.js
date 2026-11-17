@@ -8,6 +8,7 @@ import { PROVIDERS } from "../../config/providers.js";
 import { buildRequestDetail, recordRequestDetail, extractRequestConfig, saveUsageStats, formatDoneLine } from "./requestDetail.js";
 import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
 import { extractReasoningText } from "../../translator/concerns/reasoning.js";
+import { filterUsageForFormat } from "../../utils/usageTracking.js";
 
 // Responses-API providers (e.g. codex) may emit SSE without content-type + use Responses output shape
 const isResponsesProvider = (p) => PROVIDERS[p]?.format === FORMATS.OPENAI_RESPONSES;
@@ -368,7 +369,9 @@ export async function handleForcedSSEToJson({ traceAttempt, providerResponse, so
       ? chatCompletionToResponses(parsed, customToolNames)
       : sourceFormat === FORMATS.CLAUDE
         ? openAICompletionToClaudeMessage(parsed)
-        : parsed;
+        // The recorded `usage` keeps the upstream's billing fields (OpenRouter's
+        // cost, is_byok, cost_details); the client's copy does not.
+        : (parsed.usage ? { ...parsed, usage: filterUsageForFormat(parsed.usage, FORMATS.OPENAI) } : parsed);
 
     return { success: true, response: new Response(JSON.stringify(restoreToolNames(finalBody, toolNameMap)), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
   } catch (err) {
