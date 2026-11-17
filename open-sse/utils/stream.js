@@ -3,7 +3,7 @@ import { FORMATS } from "../translator/formats.js";
 import { PROVIDERS } from "../config/providers.js";
 import { liftReasoningAliases } from "../translator/concerns/reasoning.js";
 import { trackPendingRequest, appendRequestLog } from "@/lib/usageDb.js";
-import { extractUsage, mergeUsage, hasValidUsage, estimateUsage, logUsage, addBufferToUsage, filterUsageForFormat, COLORS } from "./usageTracking.js";
+import { extractUsage, mergeUsage, hasValidUsage, estimateUsage, logUsage, addBufferToUsage, filterUsageForFormat, stripClientUsage, COLORS } from "./usageTracking.js";
 import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE, ensureStreamToolCallIds } from "./streamHelpers.js";
 import { restoreToolNames } from "./opencodeFingerprint.js";
 import { getOpenAIResponsesEventName, isOpenAIResponsesTerminalEvent, formatIncompleteOpenAIResponsesStreamFailure } from "./responsesStreamHelpers.js";
@@ -38,6 +38,17 @@ const PENDING_COMPLETION_FLUSH_MS = 3000;
 function withClientUsageBuffer(item) {
   if (item?.event !== "response.completed" || !item.data?.response?.usage) return item;
   return { ...item, data: { ...item.data, response: { ...item.data.response, usage: addBufferToUsage(item.data.response.usage) } } };
+}
+
+// A translated item as the client may see it: the usage buffer, and no
+// upstream billing fields. Responses events wrap the payload in `data`.
+function toClientItem(item) {
+  const buffered = withClientUsageBuffer(item);
+  if (buffered && typeof buffered === "object" && buffered.event && buffered.data && typeof buffered.data === "object") {
+    const data = stripClientUsage(buffered.data);
+    return data === buffered.data ? buffered : { ...buffered, data };
+  }
+  return stripClientUsage(buffered);
 }
 
 /**
@@ -179,7 +190,7 @@ export function createSSEStream(options = {}) {
     const completed = translateResponse(targetFormat, sourceFormat, null, state);
     for (const item of completed || []) {
       if (item === null || item === undefined) continue;
-      const output = formatSSE(withClientUsageBuffer(item), sourceFormat);
+      const output = formatSSE(toClientItem(item), sourceFormat);
       reqLogger?.appendConvertedChunk?.(output);
       controller.enqueue(sharedEncoder.encode(output));
       sseEmittedCount++;
@@ -207,7 +218,7 @@ export function createSSEStream(options = {}) {
     if (endsWithOpenAIDone && item.object === "chat.completion.chunk" && !openAIChunkBase) {
       openAIChunkBase = { id: item.id, object: item.object, created: item.created, model: item.model };
     }
-    const output = formatSSE(withClientUsageBuffer(item), sourceFormat);
+    const output = formatSSE(toClientItem(item), sourceFormat);
     reqLogger?.appendConvertedChunk?.(output);
     controller.enqueue(sharedEncoder.encode(output));
     sseEmittedCount++;
@@ -401,6 +412,14 @@ export function createSSEStream(options = {}) {
               if (isUsageTrailer && heldFinish) emitHeldFinish(controller);
               if (isUsageTrailer && dropUsageTrailer) continue;
 
+              // Usage was recorded above from the raw chunk; the client copy loses
+              // upstream billing fields (OpenRouter's cost, is_byok, cost_details).
+              const clientSafe = stripClientUsage(parsed);
+              if (clientSafe !== parsed) {
+                parsed = clientSafe;
+                fieldsInjected = true;
+              }
+
               responsesTerminal = isOpenAIResponsesTerminalEvent(currentOpenAIResponsesEvent, parsed);
 
               const isFinishChunk = parsed.choices?.[0]?.finish_reason;
@@ -567,7 +586,7 @@ export function createSSEStream(options = {}) {
 
         // Responses same-format passthrough: re-emit with original event framing
         if (keepsOpenAIResponsesFormat && openAIResponsesEventName) {
-          const output = formatSSE({ event: openAIResponsesEventName, data: parsed }, sourceFormat);
+          const output = formatSSE({ event: openAIResponsesEventName, data: stripClientUsage(parsed) }, sourceFormat);
           reqLogger?.appendConvertedChunk?.(output);
           controller.enqueue(sharedEncoder.encode(output));
           currentOpenAIResponsesEvent = null;
@@ -645,16 +664,17 @@ export function createSSEStream(options = {}) {
 
         if (mode === STREAM_MODE.PASSTHROUGH) {
           // A tail line without its newline may still be the usage trailer.
-          if (heldFinish && buffer.trim().startsWith("data:")) {
-            try {
-              const tail = JSON.parse(buffer.trim().slice(5).trim());
-              const extracted = Array.isArray(tail?.choices) && tail.choices.length === 0 ? extractUsage(tail) : null;
-              if (extracted) {
-                usage = usageEstimated ? extracted : mergeUsage(usage, extracted);
-                usageEstimated = false;
-                if (dropUsageTrailer) buffer = "";
-              }
-            } catch { /* not JSON ([DONE] or partial): leave it */ }
+          let tail = null;
+          if (buffer.trim().startsWith("data:")) {
+            try { tail = JSON.parse(buffer.trim().slice(5).trim()); } catch { /* not JSON ([DONE] or partial): leave it */ }
+          }
+          if (heldFinish && tail) {
+            const extracted = Array.isArray(tail?.choices) && tail.choices.length === 0 ? extractUsage(tail) : null;
+            if (extracted) {
+              usage = usageEstimated ? extracted : mergeUsage(usage, extracted);
+              usageEstimated = false;
+              if (dropUsageTrailer) buffer = "";
+            }
           }
           emitHeldFinish(controller);
           // An unterminated trailing "data: [DONE]" is the upstream sentinel: don't
@@ -664,7 +684,10 @@ export function createSSEStream(options = {}) {
           const tailIsDone = tailLine.startsWith("data:") && tailLine.slice(5).trim() === "[DONE]";
           if (!tailIsDone && buffer) {
             let output = buffer;
-            if (buffer.startsWith("data:") && !buffer.startsWith("data: ")) {
+            const clientTail = tail && stripClientUsage(tail);
+            if (clientTail && clientTail !== tail) {
+              output = `data: ${JSON.stringify(clientTail)}\n`;
+            } else if (buffer.startsWith("data:") && !buffer.startsWith("data: ")) {
               output = "data: " + buffer.slice(5);
             }
             reqLogger?.appendConvertedChunk?.(output);
@@ -719,7 +742,7 @@ export function createSSEStream(options = {}) {
               for (const item of translated) {
                 if (item === null || item === undefined) continue;
                 if (heldTail) { heldTail.push(item); continue; }
-                const output = formatSSE(withClientUsageBuffer(item), sourceFormat);
+                const output = formatSSE(toClientItem(item), sourceFormat);
                 reqLogger?.appendConvertedChunk?.(output);
                 controller.enqueue(sharedEncoder.encode(output));
               }
@@ -740,7 +763,7 @@ export function createSSEStream(options = {}) {
         if (flushed?.length > 0) {
           for (const item of flushed) {
             if (item === null || item === undefined) continue;
-            const output = formatSSE(withClientUsageBuffer(item), sourceFormat);
+            const output = formatSSE(toClientItem(item), sourceFormat);
             reqLogger?.appendConvertedChunk?.(output);
             controller.enqueue(sharedEncoder.encode(output));
           }

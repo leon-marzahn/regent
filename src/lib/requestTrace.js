@@ -13,7 +13,6 @@
 // - Fail-open: every exported function swallows its own errors. Tracing must
 //   never break or slow a request.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { openaiCacheWriteTokens } from "open-sse/translator/concerns/usage.js";
 
 export const MAX_TRACES = 500;
 export const MAX_ATTEMPTS = 16;
@@ -244,10 +243,9 @@ function compactTokens(t) {
     in: num(t.prompt_tokens) ?? num(t.input_tokens),
     out: num(t.completion_tokens) ?? num(t.output_tokens),
     cached,
-    cacheWrite: num(t.cache_creation_input_tokens) ?? num(openaiCacheWriteTokens(t.prompt_tokens_details)),
+    cacheWrite: num(t.cache_creation_input_tokens),
     reasoning: num(t.reasoning_tokens) ?? num(t.completion_tokens_details?.reasoning_tokens),
     credits: num(t.credits),
-    costUsd: num(t.cost_usd),
   };
   for (const k of Object.keys(out)) if (out[k] === undefined) delete out[k];
   return Object.keys(out).length ? out : undefined;

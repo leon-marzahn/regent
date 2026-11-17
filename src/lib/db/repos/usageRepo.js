@@ -171,12 +171,6 @@ export async function calculateCost(provider, model, tokens) {
       const usd = creditsToUsd(provider, tokens.credits);
       if (usd > 0) return usd;
     }
-    // Aggregators that bill per request (OpenRouter) report the USD they charged; the
-    // price table can only guess (wrong model match, upstream-specific rates, discounts).
-    if (Number.isFinite(tokens.cost_usd) && tokens.cost_usd >= 0) {
-      const { PROVIDERS } = await import("open-sse/config/providers.js");
-      if (PROVIDERS[provider]?.quirks?.reportsUsageCost) return tokens.cost_usd;
-    }
     const { getPricingForModel } = await import("./pricingRepo.js");
     const pricing = await getPricingForModel(provider, model);
     if (!pricing) return 0;

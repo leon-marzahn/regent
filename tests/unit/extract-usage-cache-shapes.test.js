@@ -12,8 +12,7 @@ vi.mock("../../open-sse/utils/stream.js", () => ({
   formatSSE: vi.fn(),
 }));
 
-import { extractUsageFromResponse, formatDoneLine } from "../../open-sse/handlers/chatCore/requestDetail.js";
-import { traceDetail } from "../../src/lib/requestTrace.js";
+import { extractUsageFromResponse } from "../../open-sse/handlers/chatCore/requestDetail.js";
 import { canonicalizeUsage } from "../../open-sse/utils/usageTracking.js";
 
 // The three real-world usage shapes and how extractUsageFromResponse() must
@@ -105,21 +104,6 @@ describe("extractUsageFromResponse cache surfaces", () => {
     expect(canon.prompt_tokens).toBe(100);
     expect(canon.cached_tokens).toBe(80);
     expect(canon.total_tokens).toBe(120);
-  });
-
-  it("keeps OpenRouter's cache writes (cache_write_tokens) on a non-streaming body", () => {
-    // prompt_tokens already includes the writes and the reads.
-    const out = extractUsageFromResponse({
-      choices: [{ message: { content: "OK" } }],
-      usage: { prompt_tokens: 5000, completion_tokens: 4, prompt_tokens_details: { cached_tokens: 4000, cache_write_tokens: 900 } },
-    });
-    const canon = canonicalizeUsage(out);
-    expect(canon).toMatchObject({ prompt_tokens: 5000, cached_tokens: 4000, cache_creation_input_tokens: 900 });
-    expect(formatDoneLine({ usage: out })).toContain("IN 5000 (CACHE ↻4000 +900)");
-
-    const attempt = { traceId: "t1" };
-    traceDetail(attempt, { status: "ok", response: {}, tokens: out });
-    expect(attempt.tokens).toMatchObject({ in: 5000, cached: 4000, cacheWrite: 900 });
   });
 
   it("returns null for an Ollama-shaped body missing done flag", () => {

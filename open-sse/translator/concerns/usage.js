@@ -1,20 +1,3 @@
-// Cache-write count from an OpenAI-shaped prompt_tokens_details: ours (buildUsage) is
-// cache_creation_tokens, OpenRouter reports cache_write_tokens. undefined when absent.
-export function openaiCacheWriteTokens(details) {
-  return details?.cache_creation_tokens ?? details?.cache_write_tokens;
-}
-
-// USD the request actually cost, as an aggregator reports it in usage (OpenRouter:
-// `cost`, which with BYOK is only OpenRouter's fee; the upstream then bills
-// cost_details.upstream_inference_cost to the user's own key). undefined when absent.
-export function reportedUsageCost(usage) {
-  // Numbers only: a coerced "" or true would override the price table with $0 or $1.
-  const cost = usage?.cost;
-  if (typeof cost !== "number" || !Number.isFinite(cost) || cost < 0) return undefined;
-  const upstream = usage.cost_details?.upstream_inference_cost;
-  return usage.is_byok === true && typeof upstream === "number" && Number.isFinite(upstream) && upstream > 0 ? cost + upstream : cost;
-}
-
 // Build OpenAI usage object. Caller computes prompt/completion/total (provider math).
 // Optional details added only when > 0 (matches existing claude/gemini/codex behavior).
 export function buildUsage({ promptTokens, completionTokens, totalTokens, cachedTokens = 0, cacheCreationTokens = 0, reasoningTokens = 0 }) {

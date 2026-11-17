@@ -3,7 +3,6 @@
  */
 
 import { FORMATS } from "../translator/formats.js";
-import { openaiCacheWriteTokens, reportedUsageCost } from "../translator/concerns/usage.js";
 
 // Legacy per-chunk usage console line; off by default (superseded by "📊 done")
 const DEBUG_USAGE = process.env.LOG_USAGE_VERBOSE === "1";
@@ -88,7 +87,7 @@ export function filterUsageForFormat(usage, targetFormat) {
       'estimated'
     ],
     [FORMATS.OPENAI_RESPONSES]: [
-      'input_tokens', 'output_tokens',
+      'input_tokens', 'output_tokens', 'total_tokens',
       'input_tokens_details', 'output_tokens_details',
       'estimated'
     ],
@@ -117,6 +116,49 @@ export function filterUsageForFormat(usage, targetFormat) {
   return pickFields(fields);
 }
 
+// filterUsageForFormat when it would drop a field, else the same object.
+function filteredOrSame(usage, format) {
+  if (!usage || typeof usage !== "object") return usage;
+  const filtered = filterUsageForFormat(usage, format);
+  return Object.keys(filtered).length === Object.keys(usage).length ? usage : filtered;
+}
+
+/**
+ * The chunk as a client may see it: every usage object it carries keeps only
+ * the fields filterUsageForFormat allows for that object's format, so upstream
+ * billing data (OpenRouter's cost, is_byok, cost_details, ...) never leaves
+ * regent. Call it after usage was extracted for recording. Returns the same
+ * chunk when nothing is dropped; never mutates it.
+ */
+export function stripClientUsage(chunk) {
+  if (!chunk || typeof chunk !== "object") return chunk;
+  let out = chunk;
+  const set = (key, value) => {
+    if (value === out[key]) return;
+    if (out === chunk) out = { ...chunk };
+    out[key] = value;
+  };
+
+  // Claude events (message_delta) carry Claude usage; everything else at the top level is Chat Completions.
+  const topFormat = typeof chunk.type === "string" && chunk.type.startsWith("message") ? FORMATS.CLAUDE : FORMATS.OPENAI;
+  set("usage", filteredOrSame(chunk.usage, topFormat));
+  set("usageMetadata", filteredOrSame(chunk.usageMetadata, FORMATS.GEMINI));
+
+  if (chunk.message && typeof chunk.message === "object" && chunk.message.usage) {
+    const usage = filteredOrSame(chunk.message.usage, FORMATS.CLAUDE);
+    if (usage !== chunk.message.usage) set("message", { ...chunk.message, usage });
+  }
+  if (chunk.response && typeof chunk.response === "object") {
+    let response = chunk.response;
+    const usage = filteredOrSame(response.usage, FORMATS.OPENAI_RESPONSES);
+    if (usage !== response.usage) response = { ...response, usage };
+    const usageMetadata = filteredOrSame(response.usageMetadata, FORMATS.GEMINI);
+    if (usageMetadata !== response.usageMetadata) response = { ...response, usageMetadata };
+    set("response", response);
+  }
+  return out;
+}
+
 /**
  * Normalize usage object - ensure all values are valid numbers
  */
@@ -139,8 +181,6 @@ export function normalizeUsage(usage) {
   assignNumber("reasoning_tokens", usage?.reasoning_tokens);
   // Kiro reports spend in credits (meteringEvent) instead of cache counts; keep it for the usage page.
   assignNumber("credits", usage?.credits);
-  // USD an aggregator reported for the request (OpenRouter); preferred over a price-table guess.
-  assignNumber("cost_usd", usage?.cost_usd);
 
   // Preserve nested details objects for OpenAI format forwarding
   if (usage?.prompt_tokens_details && typeof usage.prompt_tokens_details === "object") {
@@ -180,8 +220,8 @@ export function canonicalizeUsage(usage) {
   // Fall back to the nested prompt_tokens_details.cache_creation_tokens shape
   // (buildUsage()'s OpenAI-forwarding format) when the top-level field is
   // absent, so callers that pass a buildUsage() object through don't silently
-  // drop cache_creation. OpenRouter names the nested field cache_write_tokens.
-  const cacheCreation = num(usage.cache_creation_input_tokens ?? openaiCacheWriteTokens(usage.prompt_tokens_details));
+  // drop cache_creation.
+  const cacheCreation = num(usage.cache_creation_input_tokens ?? usage.prompt_tokens_details?.cache_creation_tokens);
 
   let prompt = num(usage.prompt_tokens ?? usage.input_tokens);
   let cached;
@@ -218,9 +258,6 @@ export function canonicalizeUsage(usage) {
   if (reasoning > 0) result.reasoning_tokens = reasoning;
   const creditsValue = num(usage.credits);
   if (creditsValue > 0) result.credits = creditsValue;
-  // 0 is a real reported cost (free models), so only absence is skipped.
-  const costUsd = Number(usage.cost_usd);
-  if (usage.cost_usd != null && Number.isFinite(costUsd) && costUsd >= 0) result.cost_usd = costUsd;
   return result;
 }
 
@@ -299,7 +336,6 @@ export function extractUsage(chunk) {
       cached_tokens: chunk.usage.prompt_tokens_details?.cached_tokens || chunk.usage.prompt_cache_hit_tokens,
       reasoning_tokens: chunk.usage.completion_tokens_details?.reasoning_tokens,
       credits: chunk.usage.credits,
-      cost_usd: reportedUsageCost(chunk.usage),
       prompt_tokens_details: chunk.usage.prompt_tokens_details,
       completion_tokens_details: chunk.usage.completion_tokens_details
     });
