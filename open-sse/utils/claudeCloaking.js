@@ -22,14 +22,24 @@ function deriveUuid(seed) {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${((parseInt(h[16], 16) & 0x3) | 0x8).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Claude Code's session id is a plain UUID. Ours may come from elsewhere (the
+// uuid+timestamp fallback, a client's `ses_…` header), so anything that isn't a UUID
+// is mapped to one: the same input always gives the same UUID, keeping the session stable.
+function toSessionUuid(sessionId) {
+  const clean = typeof sessionId === "string" ? sessionId.replace(/^claude:/i, "").trim() : "";
+  if (!clean) return randomUUID();
+  return UUID_RE.test(clean) ? clean.toLowerCase() : deriveUuid(`session:${clean}`);
+}
+
 // Generate fake user ID in the current Claude Code JSON format:
 // {"device_id":"<64hex>","account_uuid":"<uuid>","session_id":"<uuid>"}
 // device_id/account_uuid derive from apiKey (stable per account), session_id per-conversation
 function generateFakeUserID(sessionId, apiKey) {
   const deviceId = apiKey ? createHash("sha256").update(`device:${apiKey}`).digest("hex") : randomBytes(32).toString("hex");
   const accountUuid = apiKey ? deriveUuid(`account:${apiKey}`) : randomUUID();
-  const cleanSessionId = typeof sessionId === "string" ? sessionId.replace(/^claude:/i, "").trim() : null;
-  const sessionUuid = cleanSessionId || randomUUID();
+  const sessionUuid = toSessionUuid(sessionId);
   return `{"device_id":"${deviceId}","account_uuid":"${accountUuid}","session_id":"${sessionUuid}"}`;
 }
 
