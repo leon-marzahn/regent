@@ -92,6 +92,9 @@ const REFRESH_GRANTS = Object.fromEntries(
     })
 );
 
+// Claude subscription windows that cover every model on the account.
+const CLAUDE_ACCOUNT_WIDE_CLAIMS = new Set(["five_hour", "seven_day", "overage"]);
+
 export class DefaultExecutor extends BaseExecutor {
   constructor(provider) {
     super(provider, PROVIDERS[provider] || PROVIDERS.openai);
@@ -290,11 +293,15 @@ export class DefaultExecutor extends BaseExecutor {
   // Claude OAuth: a used-up subscription window (5h / weekly) answers 429 with
   // anthropic-ratelimit-unified-status: rejected and the window's reset as unix seconds
   // in anthropic-ratelimit-unified-reset (the headers Claude Code itself reads).
+  // Only whole-account windows are reported: a per-model weekly window (seven_day_opus, …)
+  // keeps the usual per-model backoff, since the caller locks every model on the reset.
   parseError(response, bodyText) {
     const parsed = super.parseError(response, bodyText);
     if (this.provider !== "claude" || response.status !== 429) return parsed;
     const header = (name) => response.headers?.get?.(name);
     if (header("anthropic-ratelimit-unified-status") !== "rejected") return parsed;
+    const claim = header("anthropic-ratelimit-unified-representative-claim");
+    if (claim && !CLAUDE_ACCOUNT_WIDE_CLAIMS.has(claim)) return parsed;
     const resetsAtMs = Number(header("anthropic-ratelimit-unified-reset")) * 1000;
     return Number.isFinite(resetsAtMs) && resetsAtMs > Date.now() ? { ...parsed, resetsAtMs } : parsed;
   }

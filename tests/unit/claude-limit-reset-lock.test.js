@@ -47,6 +47,14 @@ describe("Claude parseError", () => {
     expect(parsed.status).toBe(429);
   });
 
+  it("reports whole-account windows, not a per-model weekly one", () => {
+    const withClaim = (claim) => ({ ...limitHeaders(), "anthropic-ratelimit-unified-representative-claim": claim });
+    for (const claim of ["five_hour", "seven_day", "overage"]) {
+      expect(claude.parseError(rejected(429, withClaim(claim)), "x").resetsAtMs).toBe(IN_10_MIN * 1000);
+    }
+    expect(claude.parseError(rejected(429, withClaim("seven_day_opus")), "x").resetsAtMs).toBeUndefined();
+  });
+
   it("ignores a 429 that is not a rejected subscription window", () => {
     const headers = { ...limitHeaders(), "anthropic-ratelimit-unified-status": "allowed" };
     expect(claude.parseError(rejected(429, headers), "x").resetsAtMs).toBeUndefined();
