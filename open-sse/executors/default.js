@@ -287,6 +287,18 @@ export class DefaultExecutor extends BaseExecutor {
     return headers;
   }
 
+  // Claude OAuth: a used-up subscription window (5h / weekly) answers 429 with
+  // anthropic-ratelimit-unified-status: rejected and the window's reset as unix seconds
+  // in anthropic-ratelimit-unified-reset (the headers Claude Code itself reads).
+  parseError(response, bodyText) {
+    const parsed = super.parseError(response, bodyText);
+    if (this.provider !== "claude" || response.status !== 429) return parsed;
+    const header = (name) => response.headers?.get?.(name);
+    if (header("anthropic-ratelimit-unified-status") !== "rejected") return parsed;
+    const resetsAtMs = Number(header("anthropic-ratelimit-unified-reset")) * 1000;
+    return Number.isFinite(resetsAtMs) && resetsAtMs > Date.now() ? { ...parsed, resetsAtMs } : parsed;
+  }
+
   // Generic OAuth refresh for the common {grant_type, refresh_token, client_id[, ...]} shape.
   // grant = REFRESH_GRANTS[provider]; client creds resolved from PROVIDERS or this.config.
   refreshFromGrant(credentials, proxyOptions) {
