@@ -1,4 +1,9 @@
 
+# v102.6.2 (2026-11-20)
+
+## Fixes
+- **claude**: Keep thinking signed in Claude's current signature format (#185)
+
 # v102.6.1 (2026-11-20)
 
 ## Fixes
