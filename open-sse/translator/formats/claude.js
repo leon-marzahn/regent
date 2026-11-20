@@ -546,7 +546,12 @@ export function prepareClaudeRequest(body, provider = null, apiKey = null, conne
     }
   }
 
-  // 1. System: remove all cache_control, add only to last block with ttl 1h
+  // 1. System: remove all cache_control, add only to last block with ttl 1h.
+  // A string system has nowhere to carry the marker, so it becomes one text block
+  // first; otherwise the system prompt is never cached.
+  if (typeof body.system === "string" && body.system.trim()) {
+    body.system = [{ type: CLAUDE_BLOCK.TEXT, text: body.system }];
+  }
   if (body.system && Array.isArray(body.system)) {
     body.system = body.system.map((block, i) => {
       const { cache_control, ...rest } = block;
