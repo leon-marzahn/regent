@@ -1,7 +1,7 @@
 // Prompt caching on Claude OAuth for clients other than Claude Code (translated path).
 // Anthropic reads the cache only when tools + system stay byte-identical across a
 // conversation's requests, and the system prompt is only cached if a block carries
-// a cache_control marker.
+// a cache_control marker: a string system used to get none.
 import { describe, it, expect } from "vite-plus/test";
 import "./registerAll.js";
 import { translateRequest } from "../../open-sse/translator/index.js";
@@ -25,7 +25,14 @@ const fromOpenAI = (messages) =>
   translateRequest(FORMATS.OPENAI, FORMATS.CLAUDE, "claude-opus-5-5",
     { model: "x", stream: true, messages }, true, creds(), "claude", null, [], "conn1", null);
 
-const prefix = (body) => JSON.stringify({ tools: body.tools, system: body.system });
+// The billing-header block (system[0] on OAuth) changes per request by design;
+// Anthropic leaves it out of the cache match (verified live 2026-11-20: a
+// per-request header still read the cache on turn 2), so it is skipped here.
+const BILLING = "x-anthropic-billing-header:";
+const prefix = (body) => JSON.stringify({
+  tools: body.tools,
+  system: body.system.filter((b) => !b.text?.startsWith(BILLING)),
+});
 
 describe("Claude OAuth cache prefix", () => {
   it("keeps tools + system identical across turns (Claude-format client)", () => {
