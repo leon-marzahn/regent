@@ -74,16 +74,25 @@ function kiroUsageBody(usage) {
 
 // Back to Anthropic's own /api/oauth/usage shape, which T3 reads: services/usage/claude.js
 // names the windows "session (5h)", "weekly (7d)" and "weekly <model> (7d)", used = % used.
+// T3 builds per-model bars only from limits[] entries of kind "weekly_scoped".
 function claudeUsageBody(usage) {
   const quotas = usage?.quotas || {};
   const window = (q) => ({ utilization: q.used, resets_at: q.resetAt ?? null });
   const body = {
     five_hour: quotas["session (5h)"] ? window(quotas["session (5h)"]) : null,
     seven_day: quotas["weekly (7d)"] ? window(quotas["weekly (7d)"]) : null,
+    extra_usage: usage?.extraUsage ?? null,
+    limits: [],
   };
   for (const [key, q] of Object.entries(quotas)) {
     const model = /^weekly (.+) \(7d\)$/.exec(key)?.[1];
-    if (model) body[`seven_day_${model.replace(/\s+/g, "_")}`] = window(q);
+    if (!model) continue;
+    body.limits.push({
+      kind: "weekly_scoped",
+      percent: q.used,
+      resets_at: q.resetAt ?? null,
+      scope: { model: { display_name: model.charAt(0).toUpperCase() + model.slice(1) } },
+    });
   }
   if (!body.five_hour && !body.seven_day) {
     return { error: usage?.error || usage?.message || "Claude usage unavailable" };
@@ -101,7 +110,7 @@ export async function POST(request, { params }) {
     return Response.json({ error: "auth_index required" }, { status: 400 });
 
   const conn = await getProviderConnectionById(id);
-  if (!HUB_PROVIDERS[conn?.provider]) return hubError("Unknown account");
+  if (!Object.hasOwn(HUB_PROVIDERS, conn?.provider ?? "")) return hubError("Unknown account");
 
   // Same path as the dashboard: token refresh, connection proxy, auth-expired retry.
   // Fresh request: T3's query string (e.g. ?force=1) must not reach the usage cache.

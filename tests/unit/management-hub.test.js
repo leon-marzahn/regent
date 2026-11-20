@@ -61,19 +61,29 @@ describe("v0 management hub", () => {
     usageGET.mockResolvedValue(
       Response.json({
         plan: "Claude Code",
+        extraUsage: { is_enabled: false },
         quotas: {
           "session (5h)": { used: 12, total: 100, resetAt: "2026-11-20T08:00:00.000Z" },
           "weekly (7d)": { used: 40, total: 100, resetAt: "2026-11-25T00:00:00.000Z" },
-          "weekly opus (7d)": { used: 55, total: 100, resetAt: "2026-11-25T00:00:00.000Z" },
+          "weekly fable (7d)": { used: 55, total: 100, resetAt: "2026-11-25T00:00:00.000Z" },
         },
       }),
     );
     const out = await (await POST(...req("POST", "api-call", { body: { auth_index: "c1" } }))).json();
     expect(out.status_code).toBe(200);
+    // Per-model windows go in limits[] (weekly_scoped): T3 builds model bars only from those.
     expect(JSON.parse(out.body)).toEqual({
       five_hour: { utilization: 12, resets_at: "2026-11-20T08:00:00.000Z" },
       seven_day: { utilization: 40, resets_at: "2026-11-25T00:00:00.000Z" },
-      seven_day_opus: { utilization: 55, resets_at: "2026-11-25T00:00:00.000Z" },
+      extra_usage: { is_enabled: false },
+      limits: [
+        {
+          kind: "weekly_scoped",
+          percent: 55,
+          resets_at: "2026-11-25T00:00:00.000Z",
+          scope: { model: { display_name: "Fable" } },
+        },
+      ],
     });
   });
 
@@ -88,19 +98,30 @@ describe("v0 management hub", () => {
   it("reports a failed usage request even when it carries quotas", async () => {
     getProviderConnectionById.mockResolvedValue({ id: "c1", provider: "claude" });
     usageGET.mockResolvedValue(
-      Response.json({ error: "Credential refresh failed: invalid_grant" }, { status: 401 }),
+      Response.json(
+        {
+          error: "Credential refresh failed: invalid_grant",
+          quotas: { "session (5h)": { used: 1, total: 100, resetAt: null } },
+        },
+        { status: 401 },
+      ),
     );
     const out = await (await POST(...req("POST", "api-call", { body: { auth_index: "c1" } }))).json();
     expect(out.status_code).toBe(502);
     expect(JSON.parse(out.body).error).toContain("Credential refresh failed");
   });
 
-  it("refuses accounts of other providers", async () => {
-    getProviderConnectionById.mockResolvedValue({ id: "o1", provider: "openrouter" });
-    const out = await (await POST(...req("POST", "api-call", { body: { auth_index: "o1" } }))).json();
-    expect(out.status_code).toBe(502);
-    expect(usageGET).not.toHaveBeenCalled();
-  });
+  it.each(["openrouter", "toString", "constructor"])(
+    "refuses accounts of other providers (%s)",
+    async (provider) => {
+      getProviderConnectionById.mockResolvedValue({ id: "o1", provider });
+      const out = await (
+        await POST(...req("POST", "api-call", { body: { auth_index: "o1" } }))
+      ).json();
+      expect(out.status_code).toBe(502);
+      expect(usageGET).not.toHaveBeenCalled();
+    },
+  );
 
   it("answers api-call locally with a JSON-string body", async () => {
     getProviderConnectionById.mockResolvedValue({ id: "k1", provider: "kiro" });
