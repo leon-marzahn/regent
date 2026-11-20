@@ -29,25 +29,99 @@ describe("v0 management hub", () => {
     expect((await GET(...req("GET", "auth-files"))).status).toBe(401);
   });
 
-  it("lists Kiro accounts as claude auth files", async () => {
-    getProviderConnections.mockResolvedValue([
-      { id: "k1", name: "a@b.c (google)", email: "a@b.c", isActive: true },
-      { id: "k2", email: "a@b.c", isActive: false },
-      { id: "k3", authType: "api_key", isActive: true },
-      { id: "k4", authType: "oauth", isActive: true },
-    ]);
+  it("lists Kiro and Claude Code accounts as claude auth files, prefixed by provider", async () => {
+    getProviderConnections.mockImplementation(async ({ provider }) =>
+      provider === "kiro"
+        ? [
+            { id: "k1", name: "a@b.c (google)", email: "a@b.c", isActive: true },
+            { id: "k2", email: "a@b.c", isActive: false },
+            { id: "k3", authType: "api_key", isActive: true },
+            { id: "k4", authType: "oauth", isActive: true },
+          ]
+        : provider === "claude"
+          ? [{ id: "c1", email: "max@example.com", authType: "oauth", isActive: true }]
+          : [],
+    );
     const res = await GET(...req("GET", "auth-files"));
     const file = (id, email, disabled) => ({ id, auth_index: id, provider: "claude", email, disabled });
     expect(await res.json()).toEqual({
       files: [
-        file("k1", "a@b.c (google)", false),
-        file("k2", "a@b.c", true),
-        file("k3", "API Key", false),
-        file("k4", "OAuth Account", false),
+        file("k1", "Kiro · a@b.c (google)", false),
+        file("k2", "Kiro · a@b.c", true),
+        file("k3", "Kiro · API Key", false),
+        file("k4", "Kiro · OAuth Account", false),
+        file("c1", "Claude · max@example.com", false),
       ],
     });
-    expect(getProviderConnections).toHaveBeenCalledWith({ provider: "kiro" });
+    expect(getProviderConnections).toHaveBeenCalledTimes(2);
   });
+
+  it("answers api-call for a Claude Code account in Anthropic's usage shape", async () => {
+    getProviderConnectionById.mockResolvedValue({ id: "c1", provider: "claude" });
+    usageGET.mockResolvedValue(
+      Response.json({
+        plan: "Claude Code",
+        extraUsage: { is_enabled: false },
+        quotas: {
+          "session (5h)": { used: 12, total: 100, resetAt: "2026-11-20T08:00:00.000Z" },
+          "weekly (7d)": { used: 40, total: 100, resetAt: "2026-11-25T00:00:00.000Z" },
+          "weekly fable (7d)": { used: 55, total: 100, resetAt: "2026-11-25T00:00:00.000Z" },
+        },
+      }),
+    );
+    const out = await (await POST(...req("POST", "api-call", { body: { auth_index: "c1" } }))).json();
+    expect(out.status_code).toBe(200);
+    // Per-model windows go in limits[] (weekly_scoped): T3 builds model bars only from those.
+    expect(JSON.parse(out.body)).toEqual({
+      five_hour: { utilization: 12, resets_at: "2026-11-20T08:00:00.000Z" },
+      seven_day: { utilization: 40, resets_at: "2026-11-25T00:00:00.000Z" },
+      extra_usage: { is_enabled: false },
+      limits: [
+        {
+          kind: "weekly_scoped",
+          percent: 55,
+          resets_at: "2026-11-25T00:00:00.000Z",
+          scope: { model: { display_name: "Fable" } },
+        },
+      ],
+    });
+  });
+
+  it("reports a Claude account whose usage can't be read", async () => {
+    getProviderConnectionById.mockResolvedValue({ id: "c1", provider: "claude" });
+    usageGET.mockResolvedValue(Response.json({ message: "Claude connected. Unable to fetch usage: timeout" }));
+    const out = await (await POST(...req("POST", "api-call", { body: { auth_index: "c1" } }))).json();
+    expect(out.status_code).toBe(502);
+    expect(JSON.parse(out.body).error).toContain("Unable to fetch usage");
+  });
+
+  it("reports a failed usage request even when it carries quotas", async () => {
+    getProviderConnectionById.mockResolvedValue({ id: "c1", provider: "claude" });
+    usageGET.mockResolvedValue(
+      Response.json(
+        {
+          error: "Credential refresh failed: invalid_grant",
+          quotas: { "session (5h)": { used: 1, total: 100, resetAt: null } },
+        },
+        { status: 401 },
+      ),
+    );
+    const out = await (await POST(...req("POST", "api-call", { body: { auth_index: "c1" } }))).json();
+    expect(out.status_code).toBe(502);
+    expect(JSON.parse(out.body).error).toContain("Credential refresh failed");
+  });
+
+  it.each(["openrouter", "toString", "constructor"])(
+    "refuses accounts of other providers (%s)",
+    async (provider) => {
+      getProviderConnectionById.mockResolvedValue({ id: "o1", provider });
+      const out = await (
+        await POST(...req("POST", "api-call", { body: { auth_index: "o1" } }))
+      ).json();
+      expect(out.status_code).toBe(502);
+      expect(usageGET).not.toHaveBeenCalled();
+    },
+  );
 
   it("answers api-call locally with a JSON-string body", async () => {
     getProviderConnectionById.mockResolvedValue({ id: "k1", provider: "kiro" });
