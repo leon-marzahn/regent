@@ -1,4 +1,12 @@
 
+# v102.6.0 (2026-11-20)
+
+## Features
+- **usage**: Show Claude Code accounts on T3 Code's Usage page (#181)
+
+## Fixes
+- **claude**: Cache string system prompts on Claude-format upstreams (#180)
+
 # v102.5.3 (2026-11-17)
 
 ## Fixes
