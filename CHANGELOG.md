@@ -1,4 +1,9 @@
 
+# v102.6.1 (2026-11-20)
+
+## Fixes
+- **claude**: Lock a used-up Claude account until its limit resets (#183)
+
 # v102.6.0 (2026-11-20)
 
 ## Features
