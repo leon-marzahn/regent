@@ -16,11 +16,6 @@ function stripCachePrefix(rawSignature) {
   return idx >= 0 ? sig.slice(idx + 1).trim() : sig;
 }
 
-export function hasClaudeSignaturePrefix(rawSignature) {
-  const sig = stripCachePrefix(rawSignature);
-  return sig.length > 0 && (sig[0] === "E" || sig[0] === "R" || sig[0] === "C");
-}
-
 // 0x08 <varint> 0x12: field 1 (version) then the E-form's field 2.
 function isVersionedClaudeSignature(decoded) {
   if (decoded[0] !== 0x08) return false;
