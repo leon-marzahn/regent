@@ -7,12 +7,26 @@ import { getClaudeCliVersion } from "./claudeCliVersion.js";
 
 const CC_ENTRYPOINT = "sdk-cli";
 
+// Text of the conversation's first user turn: the one input that stays the same
+// on every request of a conversation.
+function firstUserText(body) {
+  const first = Array.isArray(body?.messages) ? body.messages.find(m => m?.role === "user") : null;
+  const content = first?.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) return content.map(b => (b?.type === CLAUDE_BLOCK.TEXT ? b.text || "" : "")).join("\n");
+  return "";
+}
+
 // Generate the billing header expected from current Claude Code clients.
 // x-anthropic-billing-header: cc_version=<ver>.<build>; cc_entrypoint=sdk-cli; cch=<hash>;
+// The header is system[0], the head of the prompt-cache prefix, so it must be
+// byte-identical across a conversation's requests: both hashes derive from the
+// first user turn, never from random bytes or the (growing) full body.
 function generateBillingHeader(payload) {
-  const content = JSON.stringify(payload);
-  const cch = createHash("sha256").update(content).digest("hex").slice(0, 5);
-  const buildHash = randomBytes(2).toString("hex").slice(0, 3);
+  const seed = `${getClaudeCliVersion()}\u0000${firstUserText(payload)}`;
+  const hash = (label) => createHash("sha256").update(`${label}:${seed}`).digest("hex");
+  const buildHash = hash("build").slice(0, 3);
+  const cch = hash("cch").slice(0, 5);
   return `x-anthropic-billing-header: cc_version=${getClaudeCliVersion()}.${buildHash}; cc_entrypoint=${CC_ENTRYPOINT}; cch=${cch};`;
 }
 

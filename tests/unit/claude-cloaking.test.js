@@ -15,6 +15,26 @@ it("advertises a Claude Code version accepted by Fable 5.1", () => {
   expect(body.system[0].text).toMatch(/^x-anthropic-billing-header: cc_version=2.1.322\./);
 });
 
+describe("applyCloaking billing header", () => {
+  const header = (messages) => applyCloaking({ messages }, "sk-ant-oat-test", "s").system[0].text;
+  const turn1 = [{ role: "user", content: "fix the bug" }];
+  const turn2 = [...turn1, { role: "assistant", content: "done" }, { role: "user", content: "thanks" }];
+
+  // system[0] heads the prompt-cache prefix: if it changes, nothing after it is read from cache.
+  it("is identical on every request of a conversation", () => {
+    expect(header(turn1)).toBe(header(turn1));
+    expect(header(turn2)).toBe(header(turn1));
+  });
+
+  it("differs between conversations", () => {
+    expect(header([{ role: "user", content: "something else" }])).not.toBe(header(turn1));
+  });
+
+  it("reads the first user turn from text blocks too", () => {
+    expect(header([{ role: "user", content: [{ type: "text", text: "fix the bug" }] }])).toBe(header(turn1));
+  });
+});
+
 describe("applyCloaking session_id", () => {
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
   const sessionOf = (sid) => JSON.parse(applyCloaking({ messages: [] }, "sk-ant-oat-test", sid).metadata.user_id).session_id;
